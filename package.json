@@ -1,0 +1,25 @@
+{
+  "name": "discorizedpilot",
+  "version": "1.0.0",
+  "description": "A Discord backend reimplementation, vibe-coded by CoPilot",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "pg-promise": "^11.5.4",
+    "dotenv": "^16.3.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["discord", "api", "reimplementation"],
+  "author": "",
+  "license": "ISC"
+}
