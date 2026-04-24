@@ -1,20 +1,37 @@
 const db = require('../db');
+const { generateSnowflake, generateDiscriminator } = require('../utils/discordAuth');
 
 class User {
   static async create(userData) {
-    const { username, email, password } = userData;
+    const {
+      id = generateSnowflake(),
+      username,
+      email,
+      password,
+      discriminator = generateDiscriminator(),
+      global_name = null,
+    } = userData;
     const query = `
-      INSERT INTO users (username, email, password_hash)
-      VALUES ($1, $2, $3)
-      RETURNING id, username, email, created_at
+      INSERT INTO users (id, username, discriminator, global_name, email, password_hash)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, username, discriminator, global_name, avatar, bio, email, verified, created_at
     `;
-    const values = [username, email, password];
+    const values = [id, username, discriminator, global_name, email, password];
     return db.one(query, values);
   }
 
   static async findById(id) {
     const query = `
       SELECT id, username, discriminator, global_name, avatar, bio, email, verified, created_at
+      FROM users
+      WHERE id = $1
+    `;
+    return db.oneOrNone(query, [id]);
+  }
+
+  static async findByIdWithPasswordHash(id) {
+    const query = `
+      SELECT id, username, discriminator, global_name, avatar, bio, email, verified, created_at, password_hash
       FROM users
       WHERE id = $1
     `;

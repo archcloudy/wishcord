@@ -1,12 +1,13 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const User = require('../models/user');
 const {
   invalidFormBody,
   unauthorized,
+  invalidLogin,
   parseDbError,
 } = require('../utils/discordError');
+const { generateDiscordToken, parseDiscordToken, verifyDiscordToken } = require('../utils/discordAuth');
 
 const router = express.Router();
 
@@ -37,11 +38,23 @@ router.post('/register', async (req, res) => {
     return invalidFormBody(res, missing);
   }
 
+  const authHeader = req.header('Authorization')?.replace(/^Bearer\s+/i, '').trim();
+  if (authHeader) {
+    const parsed = parseDiscordToken(authHeader);
+    if (parsed) {
+      const existingUser = await User.findByIdWithPasswordHash(parsed.userId);
+      if (existingUser) {
+        return res.json({ token: authHeader, user_id: existingUser.id });
+      }
+    }
+  }
+
   try {
     const { username, email, password } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({ username, email, password: hashedPassword });
-    res.status(201).json(user);
+    const token = generateDiscordToken(user.id, hashedPassword);
+    res.status(201).json({ token, user_id: user.id });
   } catch (error) {
     const parsed = parseDbError(error);
     if (parsed) {
@@ -71,30 +84,24 @@ router.post('/login', async (req, res) => {
   }
 
   try {
+    const authHeader = req.header('Authorization')?.replace(/^Bearer\s+/i, '').trim();
+    if (authHeader) {
+      const parsed = parseDiscordToken(authHeader);
+      if (parsed) {
+        const existingUser = await User.findByIdWithPasswordHash(parsed.userId);
+        if (existingUser && verifyDiscordToken(authHeader, existingUser.password_hash)) {
+          return res.json({ token: authHeader, user_id: existingUser.id });
+        }
+      }
+    }
+
     const { login, password } = req.body;
     const user = await User.findByEmail(login);
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return invalidFormBody(res, {
-		"login": {
-			"_errors": [
-				{
-					"code": "INVALID_LOGIN",
-					"message": "Login or password is invalid."
-				}
-			]
-		},
-		"password": {
-			"_errors": [
-				{
-					"code": "INVALID_LOGIN",
-					"message": "Login or password is invalid."
-				}
-			]
-	}
-      })
+      return invalidLogin(res);
     }
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET);
-    res.json({ token, user_id: user.id.toString() });
+    const token = generateDiscordToken(user.id, user.password_hash);
+    res.json({ token, user_id: user.id });
   } catch (error) {
     return invalidFormBody(res, {
       _errors: [{ code: 'BASE_TYPE_INVALID', message: error.message }],

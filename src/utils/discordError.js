@@ -29,6 +29,26 @@ const invalidFormBody = (res, errors = null) => {
 const unauthorized = (res, message = 'Unauthorized', code = 40001) =>
   discordError(res, 401, code, message);
 
+const invalidLogin = (res) =>
+  invalidFormBody(res, {
+    login: {
+      _errors: [
+        {
+          code: 'INVALID_LOGIN',
+          message: 'Login or password is invalid.',
+        },
+      ],
+    },
+    password: {
+      _errors: [
+        {
+          code: 'INVALID_LOGIN',
+          message: 'Login or password is invalid.',
+        },
+      ],
+    },
+  });
+
 const invalidAuthToken = (res) =>
   discordError(res, 401, 50014, 'Invalid authentication token');
 
@@ -53,6 +73,7 @@ module.exports = {
   discordError,
   invalidFormBody,
   unauthorized,
+  invalidLogin,
   invalidAuthToken,
   unknownUser,
   parseDbError,

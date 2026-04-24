@@ -1,6 +1,6 @@
 -- Create users table
 CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
+  id BIGINT PRIMARY KEY,
   username VARCHAR(32) UNIQUE NOT NULL,
   discriminator VARCHAR(4) DEFAULT '0000',
   global_name VARCHAR(32),
