@@ -57,7 +57,6 @@ const startServer = async () => {
   try {
     await ensureSchema();
     await pool.query('SELECT 1');
-    await logDatabaseDiagnostics();
     console.log('Database connection successful');
     app.listen(port, () => {
       console.log(`Server running on port ${port}`);
