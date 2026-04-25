@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_settings_proto (
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  proto_type SMALLINT NOT NULL,
+  settings_base64 TEXT NOT NULL DEFAULT '',
+  data_version INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, proto_type)
+);
+
 CREATE TABLE IF NOT EXISTS invites (
   code VARCHAR(16) PRIMARY KEY,
   guild_id BIGINT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -152,3 +162,4 @@ CREATE INDEX IF NOT EXISTS idx_guild_channels_guild_id ON guild_channels(guild_i
 CREATE INDEX IF NOT EXISTS idx_messages_channel_id_created_at ON messages(channel_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_invites_guild_id ON invites(guild_id);
 CREATE INDEX IF NOT EXISTS idx_invites_channel_id ON invites(channel_id);
+CREATE INDEX IF NOT EXISTS idx_user_settings_proto_user_id ON user_settings_proto(user_id);

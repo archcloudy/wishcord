@@ -5,6 +5,7 @@ const { SimpleZSTD } = require('simple-zstd');
 const User = require('./models/user');
 const Guild = require('./models/guild');
 const Message = require('./models/message');
+const UserSettingsProto = require('./models/userSettingsProto');
 const db = require('./db');
 const { parseDiscordToken, verifyDiscordToken } = require('./utils/discordAuth');
 
@@ -167,6 +168,16 @@ const broadcastMessageDelete = async ({ id, channelId, guildId }) => {
   };
   await Promise.all(targets.map((ws) => sendDispatch(ws, 'MESSAGE_DELETE', payload).catch((error) => {
     console.error('Gateway MESSAGE_DELETE dispatch failed:', error);
+  })));
+};
+
+const getConnectionsForUser = (userId) =>
+  Array.from(connections).filter((ws) => ws.readyState === WebSocket.OPEN && String(ws._user?.id) === String(userId));
+
+const broadcastUserSettingsProtoUpdate = async (userId, payload) => {
+  const targets = getConnectionsForUser(userId);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'USER_SETTINGS_PROTO_UPDATE', payload).catch((error) => {
+    console.error('Gateway USER_SETTINGS_PROTO_UPDATE dispatch failed:', error);
   })));
 };
 
@@ -524,11 +535,13 @@ const buildReadyPayload = async (ws, user) => {
   const guilds = readyGuilds.map((guild) => buildGatewayGuild(guild, user.id));
   const presences = readyGuilds.flatMap((guild) => guild.presences || []);
   const mergedMembers = readyGuilds.map((guild) => guild.members || []);
+  const preloadedSettings = await UserSettingsProto.get(user.id, 1);
 
   return {
     _trace: buildTrace(),
     v: ws._session.version,
     user: gatewayUser,
+    user_settings_proto: preloadedSettings?.settings_base64 || '',
     guilds,
     guild_join_requests: [],
     private_channels: [],
@@ -819,7 +832,7 @@ const createGatewayServer = (port = 8080) => {
               userId: identifyResult.userId || null,
               hasToken: Boolean(data.d?.token),
             });
-            await sendGateway(ws, { op: 9, d: false });
+            closeWithCode(ws, 4004, 'Authentication failed');
             return;
           }
 
@@ -863,4 +876,5 @@ module.exports = {
   broadcastMessageCreate,
   broadcastMessageUpdate,
   broadcastMessageDelete,
+  broadcastUserSettingsProtoUpdate,
 };
