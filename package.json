@@ -1,5 +1,5 @@
 {
-  "name": "discorizedpilot",
+  "name": "wishcord",
   "version": "1.0.0",
   "description": "A Discord backend reimplementation, vibe-coded by CoPilot",
   "main": "src/server.js",

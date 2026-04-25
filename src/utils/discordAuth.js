@@ -61,6 +61,8 @@ const generateDiscordToken = (userId, passwordHash) => {
   return `${encodedUserId}.${encodedTimeStamp}.${encodedEncryptedAuth}`;
 };
 
+const isSnowflakeString = (value) => typeof value === 'string' && /^\d{16,20}$/.test(value);
+
 const parseDiscordToken = (token) => {
   if (!token || typeof token !== 'string') return null;
   const parts = token.split('.');
@@ -69,6 +71,9 @@ const parseDiscordToken = (token) => {
 
   try {
     const userId = decode(encodedUserId).toString('utf8');
+    if (!isSnowflakeString(userId)) {
+      return null;
+    }
     return { userId, encodedUserId, encodedTimeStamp, encodedEncryptedAuth };
   } catch (error) {
     return null;
@@ -88,8 +93,16 @@ const verifyDiscordToken = (token, passwordHash) => {
     .digest();
   const expectedToken = encode(expected);
 
-  const receivedBuffer = decode(parsed.encodedEncryptedAuth);
-  const expectedBuffer = decode(expectedToken);
+  let receivedBuffer;
+  let expectedBuffer;
+
+  try {
+    receivedBuffer = decode(parsed.encodedEncryptedAuth);
+    expectedBuffer = decode(expectedToken);
+  } catch (error) {
+    return null;
+  }
+
   if (expectedBuffer.length !== receivedBuffer.length) return null;
   if (!crypto.timingSafeEqual(expectedBuffer, receivedBuffer)) return null;
 

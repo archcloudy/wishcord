@@ -24,18 +24,18 @@ class User {
     const query = `
       SELECT id, username, discriminator, global_name, avatar, bio, email, verified, created_at
       FROM users
-      WHERE id = $1
+      WHERE id::text = $1
     `;
-    return db.oneOrNone(query, [id]);
+    return db.oneOrNone(query, [String(id)]);
   }
 
   static async findByIdWithPasswordHash(id) {
     const query = `
       SELECT id, username, discriminator, global_name, avatar, bio, email, verified, created_at, password_hash
       FROM users
-      WHERE id = $1
+      WHERE id::text = $1
     `;
-    return db.oneOrNone(query, [id]);
+    return db.oneOrNone(query, [String(id)]);
   }
 
   static async findByUsername(username) {

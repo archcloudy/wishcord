@@ -55,6 +55,24 @@ const invalidAuthToken = (res) =>
 const unknownUser = (res) =>
   discordError(res, 404, 10013, 'Unknown User');
 
+const unknownGuild = (res) =>
+  discordError(res, 404, 10004, 'Unknown Guild');
+
+const unknownMember = (res) =>
+  discordError(res, 404, 10007, 'Unknown Member');
+
+const unknownRole = (res) =>
+  discordError(res, 404, 10011, 'Unknown Role');
+
+const unknownMessage = (res) =>
+  discordError(res, 404, 10008, 'Unknown Message');
+
+const unknownInvite = (res) =>
+  discordError(res, 404, 10006, 'Unknown Invite');
+
+const missingPermissions = (res) =>
+  discordError(res, 403, 50013, 'Missing Permissions');
+
 const parseDbError = (error) => {
   if (error?.code === DUPLICATE_KEY_CODE) {
     const detail = error.detail || '';
@@ -76,5 +94,11 @@ module.exports = {
   invalidLogin,
   invalidAuthToken,
   unknownUser,
+  unknownGuild,
+  unknownMember,
+  unknownRole,
+  unknownMessage,
+  unknownInvite,
+  missingPermissions,
   parseDbError,
 };
