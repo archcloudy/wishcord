@@ -26,21 +26,6 @@ const ensureSchema = async () => {
   await pool.query(initSql);
 };
 
-const logDatabaseDiagnostics = async () => {
-  const dbInfo = await pool.query(
-    `
-      SELECT current_database() AS database,
-             current_schema() AS schema,
-             inet_server_addr()::text AS server_addr,
-             inet_server_port() AS server_port
-    `,
-  );
-  const users = await pool.query('SELECT id::text AS id, username, email FROM users ORDER BY created_at DESC LIMIT 50');
-
-  console.log('Database diagnostics:', dbInfo.rows[0]);
-  console.log('Known users:', users.rows);
-};
-
 // Middleware
 app.use(express.json());
 
