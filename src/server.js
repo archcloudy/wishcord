@@ -14,6 +14,28 @@ const { createGatewayServer, buildGatewayUrl } = require('./gateway');
 const app = express();
 const port = process.env.PORT || 3000;
 
+const defaultAllowedHeaders =
+  'authorization, content-type, x-super-properties, x-discord-locale, x-debug-options, x-context-properties, x-fingerprint, x-discord-timezone, x-science-test, x-failed-requests, accept, origin, user-agent';
+const defaultExposedHeaders =
+  'Content-Type, Authorization, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Reset-After, X-RateLimit-Bucket';
+
+const allowOrigin = (req) => req.headers.origin || '*';
+
+const applyCorsHeaders = (req, res) => {
+  const requestedHeaders = req.headers['access-control-request-headers'];
+
+  res.setHeader('Access-Control-Allow-Origin', allowOrigin(req));
+  res.setHeader(
+    'Vary',
+    'Origin, Access-Control-Request-Headers, Access-Control-Request-Method'
+  );
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', requestedHeaders || defaultAllowedHeaders);
+  res.setHeader('Access-Control-Expose-Headers', defaultExposedHeaders);
+  res.setHeader('Access-Control-Max-Age', '86400');
+};
+
 // PostgreSQL connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -27,6 +49,16 @@ const ensureSchema = async () => {
 };
 
 // Middleware
+app.use((req, res, next) => {
+  applyCorsHeaders(req, res);
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
+
 app.use(express.json());
 
 // Routes
