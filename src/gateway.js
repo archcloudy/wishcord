@@ -5,6 +5,7 @@ const { SimpleZSTD } = require('simple-zstd');
 const User = require('./models/user');
 const Guild = require('./models/guild');
 const Message = require('./models/message');
+const UserGuildSettings = require('./models/userGuildSettings');
 const UserSettingsProto = require('./models/userSettingsProto');
 const db = require('./db');
 const { parseDiscordToken, verifyDiscordToken } = require('./utils/discordAuth');
@@ -535,7 +536,9 @@ const buildReadyPayload = async (ws, user) => {
   const guilds = readyGuilds.map((guild) => buildGatewayGuild(guild, user.id));
   const presences = readyGuilds.flatMap((guild) => guild.presences || []);
   const mergedMembers = readyGuilds.map((guild) => guild.members || []);
-  const preloadedSettings = await UserSettingsProto.get(user.id, 1);
+  const notificationSettings = await UserGuildSettings.getNotificationSettings(user.id).catch(() => ({ flags: 16 }));
+  const userGuildSettingsEntries = await UserGuildSettings.listForUser(user.id).catch(() => []);
+  const preloadedSettings = await UserSettingsProto.get(user.id, 1).catch(() => ({ settings_base64: '' }));
 
   return {
     _trace: buildTrace(),
@@ -557,7 +560,7 @@ const buildReadyPayload = async (ws, user) => {
     users: [gatewayUser],
     notes: {},
     user_guild_settings: {
-      entries: [],
+      entries: userGuildSettingsEntries,
       partial: false,
       version: 0,
     },
@@ -566,7 +569,7 @@ const buildReadyPayload = async (ws, user) => {
       partial: false,
       version: 0,
     },
-    notification_settings: {},
+    notification_settings: notificationSettings,
     sessions: [],
     friend_suggestion_count: 0,
     geo_ordered_rtc_regions: ['us-east', 'us-central', 'us-west', 'europe'],

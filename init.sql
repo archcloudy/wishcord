@@ -140,6 +140,8 @@ CREATE TABLE IF NOT EXISTS user_settings_proto (
   proto_type SMALLINT NOT NULL,
   settings_base64 TEXT NOT NULL DEFAULT '',
   data_version INTEGER NOT NULL DEFAULT 0,
+  client_version INTEGER NOT NULL DEFAULT 0,
+  server_version INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id, proto_type)
