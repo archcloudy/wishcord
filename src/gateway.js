@@ -5,7 +5,12 @@ const { SimpleZSTD } = require('simple-zstd');
 const User = require('./models/user');
 const Guild = require('./models/guild');
 const Message = require('./models/message');
+const ReadState = require('./models/readState');
+const Relationship = require('./models/relationship');
+const ConnectedAccount = require('./models/connectedAccount');
+const PrivateChannel = require('./models/privateChannel');
 const UserGuildSettings = require('./models/userGuildSettings');
+const UserNote = require('./models/userNote');
 const UserSettingsProto = require('./models/userSettingsProto');
 const db = require('./db');
 const { parseDiscordToken, verifyDiscordToken } = require('./utils/discordAuth');
@@ -179,6 +184,42 @@ const broadcastUserSettingsProtoUpdate = async (userId, payload) => {
   const targets = getConnectionsForUser(userId);
   await Promise.all(targets.map((ws) => sendDispatch(ws, 'USER_SETTINGS_PROTO_UPDATE', payload).catch((error) => {
     console.error('Gateway USER_SETTINGS_PROTO_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastRelationshipAdd = async (userId, payload) => {
+  const targets = getConnectionsForUser(userId);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'RELATIONSHIP_ADD', payload).catch((error) => {
+    console.error('Gateway RELATIONSHIP_ADD dispatch failed:', error);
+  })));
+};
+
+const broadcastRelationshipUpdate = async (userId, payload) => {
+  const targets = getConnectionsForUser(userId);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'RELATIONSHIP_UPDATE', payload).catch((error) => {
+    console.error('Gateway RELATIONSHIP_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastRelationshipRemove = async (userId, relationshipId) => {
+  const targets = getConnectionsForUser(userId);
+  const payload = { id: String(relationshipId) };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'RELATIONSHIP_REMOVE', payload).catch((error) => {
+    console.error('Gateway RELATIONSHIP_REMOVE dispatch failed:', error);
+  })));
+};
+
+const broadcastUserNoteUpdate = async (userId, payload) => {
+  const targets = getConnectionsForUser(userId);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'USER_NOTE_UPDATE', payload).catch((error) => {
+    console.error('Gateway USER_NOTE_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastReadStateUpdate = async (userId, payload) => {
+  const targets = getConnectionsForUser(userId);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'MESSAGE_ACK', payload).catch((error) => {
+    console.error('Gateway MESSAGE_ACK dispatch failed:', error);
   })));
 };
 
@@ -540,6 +581,13 @@ const buildReadyPayload = async (ws, user) => {
   const userGuildSettingsEntries = await UserGuildSettings.listForUser(user.id).catch(() => []);
   const preloadedSettings = await UserSettingsProto.get(user.id, 1).catch(() => ({ settings_base64: '' }));
 
+  // Fetch additional user data
+  const privateChannels = await PrivateChannel.listForUser(user.id).catch(() => []);
+  const connectedAccounts = await ConnectedAccount.listForUser(user.id).catch(() => []);
+  const relationships = await Relationship.listForUser(user.id).catch(() => []);
+  const notes = await UserNote.listForUser(user.id).catch(() => ({}));
+  const readStateEntries = await ReadState.listForUser(user.id).catch(() => []);
+
   return {
     _trace: buildTrace(),
     v: ws._session.version,
@@ -547,9 +595,9 @@ const buildReadyPayload = async (ws, user) => {
     user_settings_proto: preloadedSettings?.settings_base64 || '',
     guilds,
     guild_join_requests: [],
-    private_channels: [],
-    connected_accounts: [],
-    relationships: [],
+    private_channels: privateChannels,
+    connected_accounts: connectedAccounts,
+    relationships: relationships,
     game_relationships: [],
     presences,
     merged_members: mergedMembers,
@@ -558,14 +606,14 @@ const buildReadyPayload = async (ws, user) => {
       guilds: guilds.map((guild) => guild.presences || []),
     },
     users: [gatewayUser],
-    notes: {},
+    notes: notes,
     user_guild_settings: {
       entries: userGuildSettingsEntries,
       partial: false,
       version: 0,
     },
     read_state: {
-      entries: [],
+      entries: readStateEntries,
       partial: false,
       version: 0,
     },
@@ -879,5 +927,10 @@ module.exports = {
   broadcastMessageCreate,
   broadcastMessageUpdate,
   broadcastMessageDelete,
+  broadcastReadStateUpdate,
+  broadcastRelationshipAdd,
+  broadcastRelationshipUpdate,
+  broadcastRelationshipRemove,
   broadcastUserSettingsProtoUpdate,
+  broadcastUserNoteUpdate,
 };

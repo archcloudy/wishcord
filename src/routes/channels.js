@@ -2,7 +2,13 @@ const express = require('express');
 const Guild = require('../models/guild');
 const Invite = require('../models/invite');
 const Message = require('../models/message');
-const { broadcastMessageCreate, broadcastMessageUpdate, broadcastMessageDelete } = require('../gateway');
+const ReadState = require('../models/readState');
+const {
+  broadcastMessageCreate,
+  broadcastMessageUpdate,
+  broadcastMessageDelete,
+  broadcastReadStateUpdate,
+} = require('../gateway');
 const { authenticate } = require('../middleware/auth');
 const {
   discordError,
@@ -70,8 +76,37 @@ router.post('/channels/:channelId/messages', authenticate, requireChannelContext
     });
   }
   const message = await Message.create(req.params.channelId, req.user.id, req.body || {});
+  await ReadState.markOwnMessageRead(req.user.id, req.params.channelId, message.id);
   await broadcastMessageCreate(message);
   res.status(200).json(message);
+});
+
+router.post('/channels/:channelId/messages/:messageId/ack', authenticate, requireChannelContext, async (req, res) => {
+  if (!Guild.canViewChannel(req.guildContext, req.channel.id)) {
+    return discordError(res, 403, 50001, 'Missing Access');
+  }
+
+  const message = await Message.get(req.params.channelId, req.params.messageId);
+  if (!message) {
+    return unknownMessage(res);
+  }
+
+  const entry = await ReadState.ack(req.user.id, req.params.channelId, req.params.messageId);
+  if (!entry) {
+    return unknownMessage(res);
+  }
+
+  const payload = {
+    channel_id: String(req.params.channelId),
+    message_id: String(req.params.messageId),
+    last_acked_id: String(req.params.messageId),
+    version: 0,
+    manual: true,
+    mention_count: 0,
+  };
+
+  await broadcastReadStateUpdate(req.user.id, payload);
+  res.status(200).json({ token: null, ...entry });
 });
 
 router.get('/channels/:channelId/messages/:messageId', authenticate, requireChannelContext, async (req, res) => {

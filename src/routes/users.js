@@ -1,9 +1,19 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/user');
+const Relationship = require('../models/relationship');
+const ConnectedAccount = require('../models/connectedAccount');
+const PrivateChannel = require('../models/privateChannel');
 const UserGuildSettings = require('../models/userGuildSettings');
+const UserNote = require('../models/userNote');
 const UserSettingsProto = require('../models/userSettingsProto');
-const { broadcastUserSettingsProtoUpdate } = require('../gateway');
+const {
+  broadcastRelationshipAdd,
+  broadcastRelationshipRemove,
+  broadcastRelationshipUpdate,
+  broadcastUserNoteUpdate,
+  broadcastUserSettingsProtoUpdate,
+} = require('../gateway');
 const { authenticate } = require('../middleware/auth');
 const {
   invalidFormBody,
@@ -72,7 +82,53 @@ router.get('/@me/guilds/settings', authenticate, async (req, res) => {
     discordError(res, 500, 50000, 'Unknown Error');
   }
 });
+router.get('/@me/channels', authenticate, async (req, res) => {
+  try {
+    const channels = await PrivateChannel.listForUser(req.user.id);
+    res.json(channels);
+  } catch (error) {
+    console.error('Error fetching private channels:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
 
+router.get('/@me/dms/:id', authenticate, async (req, res) => {
+  try {
+    const channel = await PrivateChannel.getDMChannel(req.user.id, req.params.id);
+    if (!channel) {
+      return discordError(res, 404, 10003, 'Unknown Channel');
+    }
+    res.json(channel);
+  } catch (error) {
+    console.error('Error fetching DM channel:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
+router.post('/@me/channels', authenticate, async (req, res) => {
+  const recipientIds = Array.isArray(req.body.recipients)
+    ? req.body.recipients.map(String)
+    : (req.body.recipient_id ? [String(req.body.recipient_id)] : []);
+
+  if (!recipientIds.length) {
+    return invalidFormBody(res, {
+      recipients: {
+        _errors: [{ code: 'BASE_TYPE_REQUIRED', message: 'recipient_id or recipients is required.' }],
+      },
+    });
+  }
+
+  try {
+    const channel = await PrivateChannel.createChannel(req.user.id, recipientIds, {
+      name: typeof req.body.name === 'string' ? req.body.name : null,
+      icon: req.body.icon || null,
+    });
+    res.json(channel);
+  } catch (error) {
+    console.error('Error creating private channel:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
 router.get('/@me/notification-settings', authenticate, async (req, res) => {
   try {
     const settings = await UserGuildSettings.getNotificationSettings(req.user.id);

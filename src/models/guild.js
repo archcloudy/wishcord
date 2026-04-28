@@ -69,8 +69,26 @@ const mapPartialUser = (user) => ({
   avatar: user.avatar,
 });
 
+const mapGatewayUser = (user) => ({
+  id: String(user.id),
+  username: user.username,
+  discriminator: user.discriminator,
+  global_name: user.global_name,
+  avatar: user.avatar,
+  banner: user.banner,
+  accent_color: user.accent_color,
+  pronouns: user.pronouns,
+  bio: user.bio,
+  email: user.email,
+  verified: user.verified,
+  mfa_enabled: user.mfa_enabled,
+  flags: user.flags,
+  public_flags: user.public_flags,
+  premium_type: user.premium_type,
+});
+
 const mapMember = (member, user, permissions) => ({
-  user: mapPartialUser(user),
+  user: mapGatewayUser(user),
   nick: member.nick,
   avatar: member.avatar,
   banner: member.banner,
@@ -860,7 +878,12 @@ class Guild {
       db.oneOrNone('SELECT * FROM guilds WHERE id = $1', [guildId]),
       this.getMemberRecord(guildId, userId),
       db.oneOrNone(
-        'SELECT id, username, discriminator, global_name, avatar FROM users WHERE id = $1',
+        `
+          SELECT id, username, discriminator, global_name, avatar, banner, accent_color, pronouns,
+                 bio, email, verified, mfa_enabled, flags, public_flags, premium_type
+          FROM users
+          WHERE id = $1
+        `,
         [userId],
       ),
       db.manyOrNone('SELECT * FROM guild_roles WHERE guild_id = $1 ORDER BY position ASC, id ASC', [guildId]),
@@ -882,7 +905,9 @@ class Guild {
       db.manyOrNone('SELECT * FROM guild_members WHERE guild_id = $1 ORDER BY joined_at ASC', [guildId]),
       db.manyOrNone(
         `
-          SELECT u.id, u.username, u.discriminator, u.global_name, u.avatar
+          SELECT u.id, u.username, u.discriminator, u.global_name, u.avatar, u.banner, u.accent_color,
+                 u.pronouns, u.bio, u.email, u.verified, u.mfa_enabled, u.flags, u.public_flags,
+                 u.premium_type
           FROM users u
           INNER JOIN guild_members gm ON gm.user_id = u.id
           WHERE gm.guild_id = $1
