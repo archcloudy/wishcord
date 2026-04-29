@@ -12,12 +12,66 @@ const PrivateChannel = require('./models/privateChannel');
 const UserGuildSettings = require('./models/userGuildSettings');
 const UserNote = require('./models/userNote');
 const UserSettingsProto = require('./models/userSettingsProto');
-const db = require('./db');
 const { parseDiscordToken, verifyDiscordToken } = require('./utils/discordAuth');
 
 const CLOSE_DECODE_ERROR = 1007;
 const CLOSE_POLICY_VIOLATION = 1008;
+const CLOSE_ALREADY_AUTHENTICATED = 4005;
+const CLOSE_AUTH_FAILED = 4004;
+const CLOSE_INVALID_INTENTS = 4013;
+const CLOSE_TOO_MANY_SESSIONS = 4015;
+const CLOSE_SESSION_TIMED_OUT = 4009;
+
+const HEARTBEAT_INTERVAL_MS = 45000;
+const MAX_SESSIONS_PER_USER = 8;
+
+const OP_DISPATCH = 0;
+const OP_HEARTBEAT = 1;
+const OP_IDENTIFY = 2;
+const OP_PRESENCE_UPDATE = 3;
+const OP_VOICE_STATE_UPDATE = 4;
+const OP_VOICE_SERVER_PING = 5;
+const OP_RESUME = 6;
+const OP_REQUEST_GUILD_MEMBERS = 8;
+const OP_INVALID_SESSION = 9;
+const OP_HELLO = 10;
+const OP_HEARTBEAT_ACK = 11;
+const OP_GUILD_SYNC = 12;
+const OP_CALL_CONNECT = 13;
+const OP_GUILD_SUBSCRIPTIONS = 14;
+const OP_LOBBY_CONNECT = 15;
+const OP_LOBBY_DISCONNECT = 16;
+const OP_LOBBY_VOICE_STATES = 17;
+const OP_STREAM_CREATE = 18;
+const OP_STREAM_DELETE = 19;
+const OP_STREAM_WATCH = 20;
+const OP_STREAM_PING = 21;
+const OP_STREAM_SET_PAUSED = 22;
+const OP_LFG_SUBSCRIPTIONS = 23;
+const OP_REQUEST_GUILD_APP_CMDS = 24;
+const OP_EMBEDDED_ACTIVITY_CREATE = 25;
+const OP_EMBEDDED_ACTIVITY_DELETE = 26;
+const OP_EMBEDDED_ACTIVITY_UPDATE = 27;
+const OP_REQUEST_FORUM_UNREADS = 28;
+const OP_REMOTE_COMMAND = 29;
+const OP_REQUEST_DELETED_ENTITY_IDS = 30;
+const OP_REQUEST_SOUNDBOARD_SOUNDS = 31;
+const OP_SPEED_TEST_CREATE = 32;
+const OP_SPEED_TEST_DELETE = 33;
+const OP_REQUEST_LAST_MESSAGES = 34;
+const OP_SEARCH_RECENT_MEMBERS = 35;
+const OP_REQUEST_CHANNEL_STATUSES = 36;
+const OP_GUILD_SUBSCRIPTIONS_BULK = 37;
+const OP_GUILD_CHANNELS_RESYNC = 38;
+const OP_REQUEST_CHANNEL_MEMBER_COUNT = 39;
+const OP_QOS_HEARTBEAT = 40;
+const OP_UPDATE_TIME_SPENT_SESSION_ID = 41;
+const OP_LOBBY_VOICE_SERVER_PING = 42;
+const OP_REQUEST_CHANNEL_INFO = 43;
+
 const connections = new Set();
+const sessions = new Map();
+const userSessions = new Map();
 
 const createZlibCompressor = () => {
   const stream = zlib.createDeflate({
@@ -62,29 +116,83 @@ const buildGatewayUrl = ({ protocol = 'ws', host, port, version, encoding, compr
   return baseUrl.toString();
 };
 
-const buildTrace = () => [`["wishcord-js-gateway",{"micros":0}]`];
+const buildTrace = () => ['wishcord'];
 
-const buildGatewayUser = (user) => ({
-  id: user.id,
+const normalizedStatus = (presence = {}) => {
+  const status = typeof presence.status === 'string' ? presence.status : 'online';
+  return status && status !== 'unknown' ? status : 'online';
+};
+
+const overallStatus = (sessionList) => {
+  const priority = ['dnd', 'online', 'idle', 'invisible', 'offline'];
+  for (const candidate of priority) {
+    for (const session of sessionList) {
+      if (normalizedStatus(session.presence) === candidate) {
+        return candidate;
+      }
+    }
+  }
+  return 'offline';
+};
+
+const buildLivePresence = (userId) => {
+  const userConnections = getConnectionsForUser(userId);
+  const sessionsForUser = userConnections.map((conn) => sessions.get(conn)).filter(Boolean);
+  const firstActive = sessionsForUser.find((s) => normalizedStatus(s?.presence) !== 'offline') || sessionsForUser[0];
+  const status = overallStatus(sessionsForUser);
+  return {
+    status,
+    activities: firstActive?.presence?.activities || [],
+    client_status: firstActive?.presence?.client_status || (status === 'offline' || status === 'invisible' ? {} : { web: status }),
+  };
+};
+
+const buildPresenceUpdatePayload = (userId, guildId = null) => {
+  const presence = buildLivePresence(userId);
+  return {
+    user: { id: String(userId) },
+    guild_id: guildId ? String(guildId) : undefined,
+    status: presence.status,
+    activities: presence.activities,
+    client_status: presence.client_status,
+  };
+};
+
+const buildGatewayUser = (user, wsSession = null) => ({
+  id: String(user.id),
   username: user.username,
   discriminator: user.discriminator || '0000',
-  global_name: user.global_name,
-  avatar: user.avatar || null,
+  global_name: user.global_name ?? null,
+  avatar: user.avatar ?? null,
   avatar_decoration_data: null,
-  banner: null,
+  banner: user.banner ?? null,
   banner_color: null,
-  accent_color: null,
+  accent_color: user.accent_color ?? null,
   bio: user.bio || '',
+  pronouns: user.pronouns || '',
   locale: 'en-US',
   nsfw_allowed: true,
-  mfa_enabled: false,
-  premium_type: 0,
-  public_flags: 0,
-  flags: 0,
+  mfa_enabled: Boolean(user.mfa_enabled),
+  authenticator_types: user.mfa_enabled ? [2] : [],
+  premium_type: Number(user.premium_type || 0),
+  premium: Number(user.premium_type || 0) > 0,
+  premium_usage_flags: 0,
+  purchased_flags: 0,
+  public_flags: Number(user.public_flags || 0),
+  flags: Number(user.flags || 0),
   verified: Boolean(user.verified),
-  email: user.email,
+  email: user.email ?? null,
+  phone: null,
   bot: false,
   system: false,
+  desktop: false,
+  mobile: false,
+  collectibles: null,
+  display_name_styles: null,
+  primary_guild: null,
+  status: wsSession ? normalizedStatus(wsSession.presence) : 'offline',
+  activities: wsSession?.presence?.activities || [],
+  client_status: wsSession?.presence?.client_status || {},
 });
 
 const omit = (object, keys) => Object.fromEntries(Object.entries(object).filter(([key]) => !keys.includes(key)));
@@ -223,12 +331,17 @@ const broadcastReadStateUpdate = async (userId, payload) => {
   })));
 };
 
-const buildPresenceForMember = (member, guildId) => ({
-  user: { id: String(member.user.id) },
-  guild_id: String(guildId),
-  status: 'online',
-  activities: [],
-  client_status: { web: 'online' },
+const sortMembersForList = (members) => [...members].sort((left, right) => {
+  const leftPresence = buildLivePresence(left.user.id);
+  const rightPresence = buildLivePresence(right.user.id);
+  const leftOnline = !['offline', 'invisible'].includes(leftPresence.status) ? 1 : 0;
+  const rightOnline = !['offline', 'invisible'].includes(rightPresence.status) ? 1 : 0;
+  if (leftOnline !== rightOnline) {
+    return rightOnline - leftOnline;
+  }
+  const leftName = String(left.nick || left.user.global_name || left.user.username || '').toLowerCase();
+  const rightName = String(right.nick || right.user.global_name || right.user.username || '').toLowerCase();
+  return leftName.localeCompare(rightName);
 });
 
 const sendGuildMembersChunk = async (ws, guildId, members, options = {}) => {
@@ -242,8 +355,8 @@ const sendGuildMembersChunk = async (ws, guildId, members, options = {}) => {
       chunk_index: index,
       chunk_count: chunkCount,
       not_found: options.notFound?.length ? options.notFound : undefined,
-      presences: options.presences ? slice.map((member) => buildPresenceForMember(member, guildId)) : undefined,
-      nonce: options.nonce || undefined,
+      presences: options.presences ? slice.map((member) => buildPresenceUpdatePayload(member.user.id, guildId)) : undefined,
+      nonce: typeof options.nonce === 'string' && Buffer.byteLength(options.nonce) <= 32 ? options.nonce : undefined,
     });
   }
 };
@@ -279,19 +392,21 @@ const sendGuildMemberListUpdate = async (ws, guildId, subscription = {}) => {
     return;
   }
 
-  const members = await Guild.listMembers(guildId);
+  const members = sortMembersForList(await Guild.listMembers(guildId));
   const channels = subscription.channels && typeof subscription.channels === 'object'
     ? subscription.channels
     : {};
   const channelEntries = Object.entries(channels);
+
+  const onlineCount = members.filter((m) => !['offline', 'invisible'].includes(buildLivePresence(m.user.id).status)).length;
 
   if (!channelEntries.length) {
     await sendDispatch(ws, 'GUILD_MEMBER_LIST_UPDATE', {
       guild_id: String(guildId),
       id: 'everyone',
       member_count: members.length,
-      online_count: members.length,
-      groups: [],
+      online_count: onlineCount,
+      groups: [{ id: 'online', count: onlineCount }, { id: 'offline', count: members.length - onlineCount }],
       ops: buildMemberListOps(members),
     });
     return;
@@ -302,45 +417,43 @@ const sendGuildMemberListUpdate = async (ws, guildId, subscription = {}) => {
       guild_id: String(guildId),
       id: String(channelId),
       member_count: members.length,
-      online_count: members.length,
-      groups: [],
+      online_count: onlineCount,
+      groups: [{ id: 'online', count: onlineCount }, { id: 'offline', count: members.length - onlineCount }],
       ops: buildMemberListOps(members, ranges),
     });
   }
 };
 
 const handleRequestGuildMembers = async (ws, payload) => {
-  const guildIds = Array.isArray(payload.guild_id) ? payload.guild_id : [payload.guild_id];
+  const data = payload.d || payload;
+  const guildIds = Array.isArray(data.guild_id) ? data.guild_id : [data.guild_id];
   for (const guildId of guildIds.filter(Boolean)) {
     const context = await Guild.getContext(guildId, ws._user.id);
     if (!context) {
       continue;
     }
 
-    let members = await Guild.listMembers(guildId);
+    let members = sortMembersForList(await Guild.listMembers(guildId));
     let notFound = [];
 
-    if (Array.isArray(payload.user_ids) && payload.user_ids.length) {
-      const requestedIds = new Set(payload.user_ids.map(String));
-      notFound = payload.user_ids.map(String).filter((userId) => !members.some((member) => String(member.user.id) === userId));
+    if (Array.isArray(data.user_ids) && data.user_ids.length) {
+      const requestedIds = new Set(data.user_ids.map(String));
+      notFound = data.user_ids.map(String).filter((userId) => !members.some((member) => String(member.user.id) === userId));
       members = members.filter((member) => requestedIds.has(String(member.user.id)));
-    } else if (typeof payload.query === 'string') {
-      const query = payload.query.toLowerCase();
+    } else if (typeof data.query === 'string') {
+      const query = data.query.toLowerCase();
       if (query) {
-        members = members.filter((member) => {
-          const name = (member.nick || member.user.global_name || member.user.username || '').toLowerCase();
-          return name.startsWith(query);
-        });
+        members = members.filter((member) => String(member.nick || member.user.global_name || member.user.username || '').toLowerCase().startsWith(query));
       }
-      const limit = Number(payload.limit);
+      const limit = Number(data.limit);
       if (!Number.isNaN(limit) && limit > 0) {
         members = members.slice(0, limit);
       }
     }
 
     await sendGuildMembersChunk(ws, guildId, members, {
-      presences: Boolean(payload.presences),
-      nonce: payload.nonce,
+      presences: Boolean(data.presences),
+      nonce: data.nonce,
       notFound,
     });
   }
@@ -453,7 +566,7 @@ const sendSubscriptionMemberRanges = async (ws, guildId, subscription = {}) => {
     return;
   }
 
-  let members = await Guild.listMembers(guildId);
+  let members = sortMembersForList(await Guild.listMembers(guildId));
   const requestedLimit = getRequestedRangeLimit(subscription);
   if (requestedLimit !== null) {
     members = members.slice(0, requestedLimit);
@@ -463,9 +576,7 @@ const sendSubscriptionMemberRanges = async (ws, guildId, subscription = {}) => {
     return;
   }
 
-  await sendGuildMembersChunk(ws, guildId, members, {
-    presences: true,
-  });
+  await sendGuildMembersChunk(ws, guildId, members, { presences: true });
 };
 
 const sendSubscriptionBootstrap = async (ws, guildId, subscription = {}) => {
@@ -572,21 +683,31 @@ const buildGatewayGuild = (guild, currentUserId) => {
 };
 
 const buildReadyPayload = async (ws, user) => {
-  const gatewayUser = buildGatewayUser(user);
+  const gatewayUser = buildGatewayUser(user, ws._session);
   const readyGuilds = await Guild.listGuildsForReady(user.id);
   const guilds = readyGuilds.map((guild) => buildGatewayGuild(guild, user.id));
-  const presences = readyGuilds.flatMap((guild) => guild.presences || []);
-  const mergedMembers = readyGuilds.map((guild) => guild.members || []);
   const notificationSettings = await UserGuildSettings.getNotificationSettings(user.id).catch(() => ({ flags: 16 }));
   const userGuildSettingsEntries = await UserGuildSettings.listForUser(user.id).catch(() => []);
   const preloadedSettings = await UserSettingsProto.get(user.id, 1).catch(() => ({ settings_base64: '' }));
 
-  // Fetch additional user data
   const privateChannels = await PrivateChannel.listForUser(user.id).catch(() => []);
   const connectedAccounts = await ConnectedAccount.listForUser(user.id).catch(() => []);
   const relationships = await Relationship.listForUser(user.id).catch(() => []);
   const notes = await UserNote.listForUser(user.id).catch(() => ({}));
   const readStateEntries = await ReadState.listForUser(user.id).catch(() => []);
+
+  const mergedMembers = readyGuilds.map((guild) => guild.members || []);
+  const guildPresences = readyGuilds.map((guild) => (guild.members || []).map((member) => buildPresenceUpdatePayload(member.user.id, guild.id)));
+
+  const dedupedUsers = new Map();
+  dedupedUsers.set(String(user.id), gatewayUser);
+  for (const guild of readyGuilds) {
+    for (const member of guild.members || []) {
+      if (!dedupedUsers.has(String(member.user.id))) {
+        dedupedUsers.set(String(member.user.id), buildGatewayUser(member.user, null));
+      }
+    }
+  }
 
   return {
     _trace: buildTrace(),
@@ -597,16 +718,16 @@ const buildReadyPayload = async (ws, user) => {
     guild_join_requests: [],
     private_channels: privateChannels,
     connected_accounts: connectedAccounts,
-    relationships: relationships,
+    relationships,
     game_relationships: [],
-    presences,
+    presences: guildPresences.flat(),
     merged_members: mergedMembers,
     merged_presences: {
-      friends: [],
-      guilds: guilds.map((guild) => guild.presences || []),
+      friends: relationships.map((relationship) => buildPresenceUpdatePayload(relationship.id)).filter(Boolean),
+      guilds: guildPresences,
     },
-    users: [gatewayUser],
-    notes: notes,
+    users: Array.from(dedupedUsers.values()),
+    notes,
     user_guild_settings: {
       entries: userGuildSettingsEntries,
       partial: false,
@@ -621,7 +742,7 @@ const buildReadyPayload = async (ws, user) => {
     sessions: [],
     friend_suggestion_count: 0,
     geo_ordered_rtc_regions: ['us-east', 'us-central', 'us-west', 'europe'],
-    auth: {},
+    auth: { authenticator_types: user.mfa_enabled ? [2] : [] },
     experiments: [],
     guild_experiments: [],
     tutorial: null,
@@ -632,59 +753,57 @@ const buildReadyPayload = async (ws, user) => {
     session_type: 'normal',
     resume_gateway_url: ws._gatewayUrl,
     api_code_version: 0,
-    auth_session_id_hash: '',
-    static_client_session_id: ws._session.session_id,
+    auth_session_id_hash: ws._session.authSessionIdHash || ws._session.session_id,
+    static_client_session_id: ws._session.staticClientSessionId,
   };
 };
 
-const getIdentifyUser = async (identifyPayload) => {
+const buildReadySupplementalPayload = async (ws, user) => {
+  const readyGuilds = await Guild.listGuildsForReady(user.id);
+  const guilds = readyGuilds.map((guild) => buildGatewayGuild(guild, user.id));
+  const mergedMembers = readyGuilds.map((guild) => guild.members || []);
+
+  return {
+    guilds: guilds.map((g) => ({ id: g.id, properties: g.properties, member_count: g.member_count })),
+    merged_members: mergedMembers,
+    merged_presences: {
+      friends: [],
+      guilds: guilds.map((guild) => (guild.members || []).map((member) => buildPresenceUpdatePayload(member.user.id, guild.id))),
+    },
+    lazy_private_channels: [],
+    disclose: [],
+  };
+};
+
+const getIdentifyUser = async (identifyPayload = {}) => {
   const token = identifyPayload?.token;
   const parsed = parseDiscordToken(token);
   if (!parsed) {
     return { user: null, reason: 'token-parse-failed' };
   }
-
   const user = await User.findByIdWithPasswordHash(parsed.userId);
   if (!user) {
     return { user: null, reason: 'user-not-found', userId: parsed.userId };
   }
-
   if (!verifyDiscordToken(token, user.password_hash)) {
     return { user: null, reason: 'token-verification-failed', userId: parsed.userId };
   }
-
   return { user, reason: null };
 };
 
 const logGatewayUserDiagnostics = async (requestedUserId) => {
-  try {
-    const rows = await db.manyOrNone(
-      'SELECT id::text AS id, username, email FROM users ORDER BY created_at DESC LIMIT 50',
-    );
-    console.error('Gateway user diagnostics:', {
-      requestedUserId: String(requestedUserId),
-      knownUserIds: rows.map((row) => row.id),
-      users: rows,
-    });
-  } catch (error) {
-    console.error('Failed to collect gateway user diagnostics:', error);
-  }
+  console.error('Gateway identify failed for user:', String(requestedUserId));
 };
 
 const createAcceptConfig = (req) => {
-  const accepted = {
-    version: 10,
-    encoding: 'json',
-    compress: null,
-  };
+  const accepted = { version: 10, encoding: 'json', compress: null };
 
-  const versionParam = getOptionalParam(req, 'v');
-  if (versionParam !== null) {
-    const version = Number.parseInt(versionParam, 10);
-    if (Number.isNaN(version)) return null;
-    accepted.version = version;
+  const version = getOptionalParam(req, 'v');
+  if (version !== null) {
+    const parsed = Number.parseInt(version, 10);
+    if (Number.isNaN(parsed)) return null;
+    accepted.version = parsed;
   }
-
   if (accepted.version < 6 || accepted.version > 10) {
     return null;
   }
@@ -699,7 +818,7 @@ const createAcceptConfig = (req) => {
 
   const compress = getOptionalParam(req, 'compress');
   if (compress !== null) {
-    if (compress !== 'zlib-stream' && compress !== 'zstd-stream') {
+    if (!['zlib-stream', 'zstd-stream'].includes(compress)) {
       return null;
     }
     accepted.compress = compress;
@@ -708,73 +827,56 @@ const createAcceptConfig = (req) => {
   return accepted;
 };
 
-const compressZlibStream = (ws, payload) =>
-  new Promise((resolve, reject) => {
-    if (!ws._zlibCompressor) {
-      ws._zlibCompressor = createZlibCompressor();
-    }
-
-    const stream = ws._zlibCompressor;
-    const chunks = [];
+const compressZlibStream = (ws, payload) => {
+  if (!ws._zlibCompressor) {
+    ws._zlibCompressor = createZlibCompressor();
+  }
+  const stream = ws._zlibCompressor;
+  const chunks = [];
+  return new Promise((resolve, reject) => {
     const onData = (chunk) => chunks.push(chunk);
-    const onError = (err) => {
-      cleanup();
-      reject(err);
+    const onError = (error) => {
+      stream.off('data', onData);
+      reject(error);
     };
-    const cleanup = () => {
-      stream.removeListener('data', onData);
-      stream.removeListener('error', onError);
-    };
-
     stream.on('data', onData);
-    stream.on('error', onError);
-
-    stream.write(Buffer.from(payload), (err) => {
-      if (err) return onError(err);
-      stream.flush(zlib.constants.Z_SYNC_FLUSH, (flushErr) => {
-        cleanup();
-        if (flushErr) return reject(flushErr);
-        resolve(Buffer.concat(chunks));
-      });
+    stream.once('error', onError);
+    stream.write(payload, (error) => {
+      stream.off('error', onError);
+      stream.off('data', onData);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(Buffer.concat(chunks));
     });
+    stream.flush(zlib.constants.Z_SYNC_FLUSH);
   });
+};
 
 const compressZstdStream = async (ws, payload) => {
   const session = await ensureZstdSession(ws);
-  return session.compressBuffer(Buffer.from(payload));
+  return session.compress(Buffer.from(payload));
 };
 
 const encodeGatewayPayload = async (payload, compression, ws) => {
-  const json = JSON.stringify(payload);
-  if (!compression) return json;
+  const serialized = JSON.stringify(payload);
+  if (!compression) return serialized;
   if (compression === 'zlib-stream') {
-    return compressZlibStream(ws, json);
+    return compressZlibStream(ws, Buffer.from(serialized));
   }
   if (compression === 'zstd-stream') {
-    return compressZstdStream(ws, json);
+    return compressZstdStream(ws, serialized);
   }
-  return json;
+  return serialized;
 };
 
-const decodeGatewayPayload = async (message, isBinary) => {
-  if (typeof message === 'string') {
-    return JSON.parse(message);
-  }
+const decodeGatewayPayload = async (message) => JSON.parse(String(message));
 
-  const data = Buffer.isBuffer(message) ? message : Buffer.from(message);
-
-  if (!isBinary) {
-    return JSON.parse(data.toString('utf8'));
-  }
-
-  throw new Error('Binary client payloads are not supported');
-};
-
-const sendGateway = async (ws, payload) => {
+const sendPayloadToConnection = async (ws, payload, compression) => {
   const previousSend = ws._sendChain || Promise.resolve();
-
   const nextSend = previousSend.then(async () => {
-    const encoded = await encodeGatewayPayload(payload, ws._compression, ws);
+    const encoded = await encodeGatewayPayload(payload, compression, ws);
     await new Promise((resolve, reject) => {
       ws.send(encoded, { binary: Buffer.isBuffer(encoded) }, (error) => {
         if (error) {
@@ -785,13 +887,14 @@ const sendGateway = async (ws, payload) => {
       });
     });
   });
-
   ws._sendChain = nextSend.catch(() => {});
   return nextSend;
 };
 
+const sendGateway = async (ws, payload) => sendPayloadToConnection(ws, payload, ws._compression);
+
 const cleanupTransport = async (ws) => {
-  if (ws._zlibCompressor) {
+  if (ws?._zlibCompressor) {
     try {
       ws._zlibCompressor.close();
     } catch (err) {
@@ -799,13 +902,10 @@ const cleanupTransport = async (ws) => {
     }
     ws._zlibCompressor = null;
   }
-  if (ws._zlibBuffer) {
-    ws._zlibBuffer = null;
-  }
-  if (ws._zstdSession) {
+  if (ws?._zstdSession) {
     try {
-      const session = await ws._zstdSession;
-      await session.destroy();
+      const zstdSession = await ws._zstdSession;
+      await zstdSession.destroy();
     } catch (err) {
       console.error('Error destroying zstd session:', err);
     }
@@ -813,9 +913,184 @@ const cleanupTransport = async (ws) => {
   }
 };
 
+let heartbeatSweepTimer = null;
+
+const sweepHeartbeats = async () => {
+  const now = Date.now();
+  for (const [connection, session] of sessions.entries()) {
+    if (session.identified && now - session.lastHeartbeat > HEARTBEAT_INTERVAL_MS * 2) {
+      closeWithCode(connection, CLOSE_SESSION_TIMED_OUT, 'heartbeat timeout');
+    }
+  }
+};
+
+const attachUserSession = (userId, ws) => {
+  if (!userId) return;
+  if (!userSessions.has(userId)) {
+    userSessions.set(userId, new Set());
+  }
+  userSessions.get(userId).add(ws);
+};
+
+const detachUserSession = (userId, ws) => {
+  if (!userId) return;
+  const set = userSessions.get(userId);
+  if (!set) return;
+  set.delete(ws);
+  if (!set.size) {
+    userSessions.delete(userId);
+  }
+};
+
+const handleIdentifyClient = async (ws, payload) => {
+  if (ws._session.identified) {
+    closeWithCode(ws, CLOSE_ALREADY_AUTHENTICATED, 'already authenticated');
+    return;
+  }
+  if (!payload.d || typeof payload.d !== 'object') {
+    closeWithCode(ws, CLOSE_DECODE_ERROR, 'invalid identify payload');
+    return;
+  }
+
+  const identifyResult = await getIdentifyUser(payload.d);
+  if (!identifyResult.user) {
+    if (identifyResult.userId) {
+      await logGatewayUserDiagnostics(identifyResult.userId);
+    }
+    console.error('Gateway identify rejected:', {
+      reason: identifyResult.reason,
+      userId: identifyResult.userId || null,
+      hasToken: Boolean(payload.d?.token),
+    });
+    closeWithCode(ws, CLOSE_AUTH_FAILED, 'authentication failed');
+    return;
+  }
+
+  const userConnections = userSessions.get(String(identifyResult.user.id));
+  if (userConnections && userConnections.size >= MAX_SESSIONS_PER_USER) {
+    closeWithCode(ws, CLOSE_TOO_MANY_SESSIONS, 'too many sessions');
+    return;
+  }
+
+  ws._session.identified = true;
+  ws._user = identifyResult.user;
+  ws._session.userId = String(identifyResult.user.id);
+  ws._session.capabilities = Number(payload.d.capabilities || 0);
+
+  if (payload.d.intents != null && !Number.isInteger(payload.d.intents)) {
+    closeWithCode(ws, CLOSE_INVALID_INTENTS, 'invalid intents');
+    return;
+  }
+  ws._session.intents = payload.d.intents || 0;
+
+  if (payload.d.properties && typeof payload.d.properties === 'object') {
+    const props = payload.d.properties;
+    ws._session.clientInfo = {
+      client: props.browser || props.$browser || 'web',
+      os: props.os || props.$os || 'linux',
+      version: Number(props.client_build_number || 0),
+    };
+  }
+
+  if (payload.d.presence && typeof payload.d.presence === 'object') {
+    const presence = payload.d.presence;
+    const status = normalizedStatus(presence);
+    ws._session.presence = {
+      status,
+      activities: Array.isArray(presence.activities) ? presence.activities : [],
+      since: presence.since ?? null,
+      afk: Boolean(presence.afk),
+      client_status: status === 'offline' || status === 'invisible' ? {} : { web: status },
+    };
+  } else {
+    ws._session.presence = { status: 'online', activities: [], since: null, afk: false, client_status: { web: 'online' } };
+  }
+
+  ws._session.staticClientSessionId = randomHex(16);
+  ws._session.authSessionIdHash = ws._session.session_id;
+
+  sessions.set(ws, ws._session);
+  attachUserSession(ws._session.userId, ws);
+
+  await sendDispatch(ws, 'READY', await buildReadyPayload(ws, ws._user));
+  await sendDispatch(ws, 'READY_SUPPLEMENTAL', await buildReadySupplementalPayload(ws, ws._user));
+};
+
+const handleHeartbeat = async (ws) => {
+  ws._session.lastHeartbeat = Date.now();
+  await sendGateway(ws, { op: OP_HEARTBEAT_ACK });
+};
+
+const handlePresenceUpdate = async (ws, payload) => {
+  const data = payload.d || payload;
+  const requestedStatus = typeof data.status === 'string' ? data.status : null;
+  const status = ['online', 'idle', 'dnd', 'invisible', 'offline'].includes(requestedStatus) ? requestedStatus : normalizedStatus(ws._session.presence);
+  ws._session.presence = {
+    status,
+    activities: Array.isArray(data.activities) ? data.activities : (ws._session.presence?.activities || []),
+    since: data.since ?? null,
+    afk: Boolean(data.afk),
+    client_status: status === 'offline' || status === 'invisible' ? {} : { web: status },
+  };
+};
+
+const handleResume = async (ws, payload) => {
+  if (!payload.d || typeof payload.d !== 'object') {
+    closeWithCode(ws, CLOSE_DECODE_ERROR, 'invalid resume payload');
+    return;
+  }
+  const identifyResult = await getIdentifyUser(payload.d);
+  if (!identifyResult.user) {
+    closeWithCode(ws, CLOSE_AUTH_FAILED, 'authentication failed');
+    return;
+  }
+
+  const sessionId = String(payload.d.session_id || '');
+  const seq = Number(payload.d.seq || 0);
+
+  const userConnections = userSessions.get(String(identifyResult.user.id));
+  let sourceSession = null;
+  if (userConnections) {
+    for (const conn of userConnections) {
+      const session = sessions.get(conn);
+      if (session?.session_id === sessionId) {
+        sourceSession = session;
+        break;
+      }
+    }
+  }
+
+  if (!sourceSession) {
+    await sendGateway(ws, { op: OP_INVALID_SESSION, d: false });
+    return;
+  }
+
+  ws._session.identified = true;
+  ws._session.userId = sourceSession.userId;
+  ws._session.user = sourceSession.user;
+  ws._user = sourceSession.user;
+  ws._session.presence = sourceSession.presence;
+  ws._session.clientInfo = sourceSession.clientInfo;
+  ws._session.staticClientSessionId = sourceSession.staticClientSessionId;
+  ws._session.authSessionIdHash = sourceSession.authSessionIdHash;
+
+  sessions.set(ws, ws._session);
+  attachUserSession(ws._session.userId, ws);
+
+  await sendGateway(ws, { op: OP_DISPATCH, t: 'RESUMED', s: ws._session.sequence, d: {} });
+};
+
 const createGatewayServer = (port = 8080) => {
+  if (heartbeatSweepTimer) {
+    clearInterval(heartbeatSweepTimer);
+  }
+
   const wss = new WebSocket.Server({ port });
   console.log(`Gateway WebSocket listening on port ${port}`);
+
+  heartbeatSweepTimer = setInterval(() => {
+    sweepHeartbeats().catch((error) => console.error('Heartbeat sweep failed:', error));
+  }, 15000);
 
   wss.on('connection', (ws, req) => {
     connections.add(ws);
@@ -829,14 +1104,25 @@ const createGatewayServer = (port = 8080) => {
       return;
     }
 
+    const sessionId = randomHex(16);
     ws._session = {
-      session_id: randomHex(16),
+      session_id: sessionId,
+      staticClientSessionId: randomHex(16),
+      authSessionIdHash: '',
       sequence: 0,
       version: acceptConfig.version,
       encoding: acceptConfig.encoding,
       compress: acceptConfig.compress,
       identified: false,
-      last_heartbeat: Date.now(),
+      lastHeartbeat: Date.now(),
+      userId: null,
+      user: null,
+      presence: { status: 'online', activities: [], since: null, afk: false, client_status: { web: 'online' } },
+      clientInfo: { client: 'web', os: 'linux', version: 0 },
+      capabilities: 0,
+      intents: 0,
+      subscribedGuilds: new Set(),
+      guildSubscriptions: new Map(),
     };
 
     ws._compression = acceptConfig.compress;
@@ -848,11 +1134,13 @@ const createGatewayServer = (port = 8080) => {
       compress: acceptConfig.compress,
     });
 
+    sessions.set(ws, ws._session);
+
     sendGateway(ws, {
-      op: 10,
+      op: OP_HELLO,
       d: {
-        heartbeat_interval: 45000,
-        _trace: ['wishcord-js-gateway'],
+        heartbeat_interval: HEARTBEAT_INTERVAL_MS,
+        _trace: buildTrace(),
       },
     }).catch((err) => console.error('Gateway send error:', err));
 
@@ -868,57 +1156,84 @@ const createGatewayServer = (port = 8080) => {
       }
 
       try {
-        const data = await decodeGatewayPayload(message, isBinary);
+        const data = await decodeGatewayPayload(message);
+        const liveSession = sessions.get(ws);
+        if (!liveSession) return;
 
-        console.log('Received:', data);
-
-        if (data.op === 2) {
-          const identifyResult = await getIdentifyUser(data.d);
-          if (!identifyResult.user) {
-            if (identifyResult.userId) {
-              await logGatewayUserDiagnostics(identifyResult.userId);
-            }
-            console.error('Gateway identify rejected:', {
-              reason: identifyResult.reason,
-              userId: identifyResult.userId || null,
-              hasToken: Boolean(data.d?.token),
-            });
-            closeWithCode(ws, 4004, 'Authentication failed');
-            return;
-          }
-
-          const identifiedUser = identifyResult.user;
-
-          ws._session.identified = true;
-          ws._user = identifiedUser;
-
-          await sendDispatch(ws, 'READY', await buildReadyPayload(ws, identifiedUser));
-        } else if (data.op === 1) {
-          await sendGateway(ws, { op: 11 });
-        } else if (data.op === 8) {
-          await handleRequestGuildMembers(ws, data.d || {});
-        } else if (data.op === 14) {
-          await handleGuildSubscriptionsWithDispatch(ws, data.d || {});
-        } else if (data.op === 37) {
-          await handleGuildSubscriptionsBulkWithDispatch(ws, data.d || {});
+        switch (data.op) {
+          case OP_HEARTBEAT:
+          case OP_QOS_HEARTBEAT:
+            await handleHeartbeat(ws);
+            break;
+          case OP_IDENTIFY:
+            await handleIdentifyClient(ws, data);
+            break;
+          case OP_PRESENCE_UPDATE:
+            await handlePresenceUpdate(ws, data);
+            break;
+          case OP_RESUME:
+            await handleResume(ws, data);
+            break;
+          case OP_REQUEST_GUILD_MEMBERS:
+            await handleRequestGuildMembers(ws, data.d || {});
+            break;
+          case OP_GUILD_SUBSCRIPTIONS:
+            await handleGuildSubscriptionsWithDispatch(ws, data.d || {});
+            break;
+          case OP_GUILD_SUBSCRIPTIONS_BULK:
+            await handleGuildSubscriptionsBulkWithDispatch(ws, data.d || {});
+            break;
+          case OP_VOICE_STATE_UPDATE:
+          case OP_VOICE_SERVER_PING:
+          case OP_CALL_CONNECT:
+          case OP_LOBBY_CONNECT:
+          case OP_LOBBY_DISCONNECT:
+          case OP_LOBBY_VOICE_STATES:
+          case OP_LFG_SUBSCRIPTIONS:
+          case OP_REQUEST_GUILD_APP_CMDS:
+          case OP_EMBEDDED_ACTIVITY_CREATE:
+          case OP_EMBEDDED_ACTIVITY_DELETE:
+          case OP_EMBEDDED_ACTIVITY_UPDATE:
+          case OP_REQUEST_FORUM_UNREADS:
+          case OP_REQUEST_DELETED_ENTITY_IDS:
+          case OP_SPEED_TEST_CREATE:
+          case OP_SPEED_TEST_DELETE:
+          case OP_LOBBY_VOICE_SERVER_PING:
+            break;
+          default:
+            break;
         }
       } catch (error) {
-        console.error('Error parsing message:', error);
+        console.error('Gateway decode error:', error);
         closeWithCode(ws, CLOSE_DECODE_ERROR, 'decode error');
       }
     });
 
-    ws.on('close', async () => {
+    ws.on('close', async (reason) => {
+      const closingSession = sessions.get(ws);
+      if (closingSession) {
+        const userId = closingSession.userId;
+        detachUserSession(userId, ws);
+        await cleanupTransport(ws);
+        sessions.delete(ws);
+      }
       connections.delete(ws);
-      await cleanupTransport(ws);
-      console.log('WebSocket connection closed');
+      console.log('Gateway connection closed:', reason?.toString());
     });
 
-    ws.on('error', (error) => {
+    ws.on('error', async (error) => {
+      const erroredSession = sessions.get(ws);
+      if (erroredSession) {
+        detachUserSession(erroredSession.userId, ws);
+        await cleanupTransport(ws);
+        sessions.delete(ws);
+      }
       connections.delete(ws);
-      console.error('WebSocket error:', error);
+      console.error('Gateway websocket error:', error);
     });
   });
+
+  return wss;
 };
 
 module.exports = {
