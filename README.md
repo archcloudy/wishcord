@@ -1,7 +1,8 @@
 # Wishcord
+Welcome to my most stupiest project ever were i make something stupid out of boredom!!! :D
+
 Wishcord is a Discord compatible server written in JavaScript.
 It is designed to be a self hosted alternative to the Discord backend while maintaining compatibility with Discord clients.
-
 
 ## Setup Guide
 ### Prerequisites:
@@ -18,3 +19,4 @@ It is designed to be a self hosted alternative to the Discord backend while main
 ## Acknowledgements
 - oldcordV3 & ziad87: Token generation logic, permissions and sessions
 - Discord: Other SVGs, images, fonts, etc - for the base clients (before patches) & some parts of Selector/Admin panel. Discord Developer Portal also has documented API responses for this recreation. And also erlpack.
+- Verycord (C++ Closed-Source): For some codes used as references for gateway + other stuff
