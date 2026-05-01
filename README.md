@@ -16,7 +16,7 @@ It is designed to be a self hosted alternative to the Discord backend while main
 4. **Start the server**: Run the command `npm run start`
 (For **testing to made changes**, run `npm run dev`)
 
-## Acknowledgements
+## Acknowledgements (and Credit?)
 - oldcordV3 & ziad87: Token generation logic, permissions and sessions
 - Discord: Other SVGs, images, fonts, etc - for the base clients (before patches) & some parts of Selector/Admin panel. Discord Developer Portal also has documented API responses for this recreation. And also erlpack.
 - Verycord (C++ Closed-Source): For some codes used as references for gateway + other stuff
