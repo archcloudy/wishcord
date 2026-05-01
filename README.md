@@ -1,5 +1,5 @@
 # Wishcord
-Welcome to my most stupiest project ever were i make something stupid out of boredom!!! :D
+Welcome to my most stupiest project ever where i make something stupid out of boredom!!! :D
 
 Wishcord is a Discord compatible server written in JavaScript.
 It is designed to be a self hosted alternative to the Discord backend while maintaining compatibility with Discord clients.
