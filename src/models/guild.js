@@ -448,6 +448,57 @@ class Guild {
     return guild;
   }
 
+  static async join(guildId, userId, options = {}) {
+    const guild = await db.oneOrNone('SELECT * FROM guilds WHERE id = $1', [guildId]);
+    if (!guild) {
+      return null;
+    }
+
+    const features = guild.features || [];
+    const existingMember = await this.getMemberRecord(guildId, userId);
+    if (existingMember) {
+      return { alreadyMember: true };
+    }
+
+    if (options.lurker) {
+      if (!features.includes('PREVIEW_ENABLED')) {
+        return { error: 'lurking_not_allowed' };
+      }
+      if (!options.sessionId) {
+        return { error: 'session_id_required' };
+      }
+      const fullGuild = await this.getFullGuild(guildId, { withCounts: true });
+      return {
+        alreadyMember: false,
+        lurking: true,
+        guild: {
+          ...fullGuild,
+          show_verification_form: false,
+          welcome_screen: null,
+        },
+      };
+    }
+
+    if (!features.includes('DISCOVERABLE') && !features.includes('PREVIEW_ENABLED')) {
+      return { error: 'not_discoverable' };
+    }
+
+    await db.none(
+      'INSERT INTO guild_members (guild_id, user_id, role_ids, flags) VALUES ($1, $2, $3, 0)',
+      [guildId, userId, JSON.stringify([])],
+    );
+
+    const fullGuild = await this.getFullGuild(guildId, { withCounts: true });
+    return {
+      alreadyMember: false,
+      guild: {
+        ...fullGuild,
+        show_verification_form: false,
+        welcome_screen: null,
+      },
+    };
+  }
+
   static async getBasic(guildId) {
     const guild = await db.oneOrNone('SELECT * FROM guilds WHERE id = $1', [guildId]);
     if (!guild) {

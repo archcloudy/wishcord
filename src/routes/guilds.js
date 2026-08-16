@@ -311,6 +311,40 @@ router.get('/users/@me/guilds/:guildId/member', authenticate, async (req, res) =
   res.json(member);
 });
 
+router.put('/guilds/:guildId/members/@me', authenticate, async (req, res) => {
+  const lurker = toBoolean(req.query.lurker);
+  if (lurker && !req.query.session_id) {
+    return invalidFormBody(res, {
+      session_id: {
+        _errors: [{ code: 'BASE_TYPE_REQUIRED', message: 'session_id is required to lurk a guild.' }],
+      },
+    });
+  }
+
+  const result = await Guild.join(req.params.guildId, req.user.id, {
+    lurker,
+    sessionId: req.query.session_id,
+  });
+
+  if (!result) {
+    return unknownGuild(res);
+  }
+  if (result.error === 'lurking_not_allowed' || result.error === 'not_discoverable') {
+    return discordError(res, 403, 50001, 'Missing Access');
+  }
+  if (result.error === 'session_id_required') {
+    return invalidFormBody(res, {
+      session_id: {
+        _errors: [{ code: 'BASE_TYPE_REQUIRED', message: 'session_id is required to lurk a guild.' }],
+      },
+    });
+  }
+  if (result.alreadyMember) {
+    return res.status(204).send();
+  }
+  res.json(result.guild);
+});
+
 router.patch('/guilds/:guildId/members/@me', authenticate, requireGuildContext, async (req, res) => {
   const updates = {};
   if (Object.prototype.hasOwnProperty.call(req.body, 'nick')) {

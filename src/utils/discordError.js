@@ -70,6 +70,9 @@ const unknownMessage = (res) =>
 const unknownInvite = (res) =>
   discordError(res, 404, 10006, 'Unknown Invite');
 
+const unknownGuildTemplate = (res) =>
+  discordError(res, 404, 10057, 'Unknown Guild Template');
+
 const missingPermissions = (res) =>
   discordError(res, 403, 50013, 'Missing Permissions');
 
@@ -99,6 +102,7 @@ module.exports = {
   unknownRole,
   unknownMessage,
   unknownInvite,
+  unknownGuildTemplate,
   missingPermissions,
   parseDbError,
 };

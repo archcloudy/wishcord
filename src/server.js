@@ -7,6 +7,7 @@ const userRoutes = require('./routes/users');
 const authRoutes = require('./routes/auth');
 const uniqueUsernameRoutes = require('./routes/uniqueUsernames');
 const guildRoutes = require('./routes/guilds');
+const guildTemplateRoutes = require('./routes/guildTemplates');
 const channelRoutes = require('./routes/channels');
 const inviteRoutes = require('./routes/invites');
 const { createGatewayServer, buildGatewayUrl } = require('./gateway');
@@ -66,6 +67,7 @@ app.use('/api/v9/users', userRoutes);
 app.use('/api/v9/auth', authRoutes);
 app.use('/api/v9', uniqueUsernameRoutes);
 app.use('/api/v9', guildRoutes);
+app.use('/api/v9', guildTemplateRoutes);
 app.use('/api/v9', channelRoutes);
 app.use('/api/v9', inviteRoutes);
 

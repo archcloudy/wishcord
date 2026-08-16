@@ -170,10 +170,23 @@ CREATE TABLE IF NOT EXISTS channel_permission_overwrites (
   PRIMARY KEY (channel_id, target_id)
 );
 
+CREATE TABLE IF NOT EXISTS guild_templates (
+  code VARCHAR(16) PRIMARY KEY,
+  source_guild_id BIGINT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+  creator_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name VARCHAR(100) NOT NULL,
+  description VARCHAR(120),
+  usage_count INTEGER NOT NULL DEFAULT 0,
+  serialized_source_guild JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_guild_members_user_id ON guild_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_guild_roles_guild_id ON guild_roles(guild_id);
 CREATE INDEX IF NOT EXISTS idx_guild_channels_guild_id ON guild_channels(guild_id);
 CREATE INDEX IF NOT EXISTS idx_messages_channel_id_created_at ON messages(channel_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_invites_guild_id ON invites(guild_id);
 CREATE INDEX IF NOT EXISTS idx_invites_channel_id ON invites(channel_id);
+CREATE INDEX IF NOT EXISTS idx_guild_templates_source_guild_id ON guild_templates(source_guild_id);
 CREATE INDEX IF NOT EXISTS idx_user_settings_proto_user_id ON user_settings_proto(user_id);
