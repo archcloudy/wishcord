@@ -21,6 +21,15 @@ const {
 
 const DEFAULT_EVERYONE_PERMISSIONS = '2251804225353728';
 const DEFAULT_CHANNEL_PERMISSIONS = '0';
+// only these guild features are surfaced on the guild profile, per the docs
+const PROFILE_VISIBLE_FEATURES = [
+  'MEMBER_VERIFICATION_GATE_ENABLED',
+  'COMMUNITY',
+  'MEMBER_VERIFICATION_MANUAL_APPROVAL',
+  'DISCOVERABLE',
+  'PARTNERED',
+  'VERIFIED',
+];
 
 const mapRole = (role) => ({
   id: String(role.id),
@@ -517,6 +526,108 @@ class Guild {
       [guildId],
     );
     return mapPartialGuild(guild, counts);
+  }
+
+  static async getProfile(guildId, userId) {
+    const guild = await db.oneOrNone('SELECT * FROM guilds WHERE id = $1', [guildId]);
+    if (!guild) {
+      return null;
+    }
+
+    const features = guild.features || [];
+    const isDiscoverable = features.includes('DISCOVERABLE');
+    const isPublicVisibility = [1, 3].includes(guild.visibility ?? 1);
+
+    const membership = userId ? await this.getMemberRecord(guildId, userId) : null;
+    if (!membership && !isDiscoverable && !isPublicVisibility) {
+      return { error: 'missing_access' };
+    }
+
+    return { profile: await this.buildProfile(guild) };
+  }
+
+  static async buildProfile(guild) {
+    const counts = await db.one(
+      'SELECT COUNT(*)::int AS member_count FROM guild_members WHERE guild_id = $1',
+      [guild.id],
+    );
+
+    return {
+      id: String(guild.id),
+      name: guild.name,
+      icon_hash: guild.icon,
+      member_count: counts.member_count,
+      online_count: 0,
+      description: guild.description || '',
+      brand_color_primary: guild.brand_color_primary || null,
+      game_application_ids: guild.game_application_ids || [],
+      game_activity: {},
+      tag: guild.tag || null,
+      badge: guild.badge || 0,
+      badge_color_primary: guild.badge_color_primary || '#000000',
+      badge_color_secondary: guild.badge_color_secondary || '#000000',
+      badge_hash: guild.badge_hash || '',
+      traits: guild.traits || [],
+      features: (guild.features || []).filter((feature) => PROFILE_VISIBLE_FEATURES.includes(feature)),
+      visibility: guild.visibility ?? 1,
+      custom_banner_hash: guild.discovery_splash,
+      premium_subscription_count: guild.premium_subscription_count,
+      premium_tier: guild.premium_tier,
+    };
+  }
+
+  static async updateProfile(guildId, updates) {
+    const fields = [];
+    const values = [guildId];
+
+    const assign = (column, value) => {
+      fields.push(`${column} = $${values.length + 1}`);
+      values.push(value);
+    };
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'name')) {
+      assign('name', updates.name);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'icon')) {
+      assign('icon', updates.icon);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'description')) {
+      assign('description', updates.description);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'brand_color_primary')) {
+      assign('brand_color_primary', updates.brand_color_primary);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'game_application_ids')) {
+      assign('game_application_ids', JSON.stringify(updates.game_application_ids || []));
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'tag')) {
+      assign('tag', updates.tag);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'badge')) {
+      assign('badge', updates.badge);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'badge_color_primary')) {
+      assign('badge_color_primary', updates.badge_color_primary);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'badge_color_secondary')) {
+      assign('badge_color_secondary', updates.badge_color_secondary);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'traits')) {
+      assign('traits', JSON.stringify(updates.traits || []));
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'visibility')) {
+      assign('visibility', updates.visibility);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'custom_banner')) {
+      assign('discovery_splash', updates.custom_banner);
+    }
+
+    if (fields.length) {
+      await db.none(`UPDATE guilds SET ${fields.join(', ')} WHERE id = $1`, values);
+    }
+
+    const guild = await db.one('SELECT * FROM guilds WHERE id = $1', [guildId]);
+    return { profile: await this.buildProfile(guild) };
   }
 
   static async listForUser(userId, withCounts = false) {

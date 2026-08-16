@@ -111,6 +111,78 @@ router.get('/guilds/:guildId/preview', authenticate, async (req, res) => {
   res.json(guild);
 });
 
+router.get('/guilds/:guildId/profile', authenticate, async (req, res) => {
+  const result = await Guild.getProfile(req.params.guildId, req.user.id);
+  if (!result) {
+    return unknownGuild(res);
+  }
+  if (result.error === 'missing_access') {
+    return discordError(res, 403, 50001, 'Missing Access');
+  }
+  res.json(result.profile);
+});
+
+router.patch('/guilds/:guildId/profile', authenticate, requireGuildContext, async (req, res) => {
+  if (!Guild.canManageGuild(req.guildContext)) {
+    return missingPermissions(res);
+  }
+
+  const hasTagFeature = (req.guildContext.guild.features || []).includes('GUILD_TAGS');
+  if (
+    (Object.prototype.hasOwnProperty.call(req.body, 'tag')
+      || Object.prototype.hasOwnProperty.call(req.body, 'badge')
+      || Object.prototype.hasOwnProperty.call(req.body, 'badge_color_primary')
+      || Object.prototype.hasOwnProperty.call(req.body, 'badge_color_secondary'))
+    && !hasTagFeature
+  ) {
+    return missingPermissions(res);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(req.body, 'name') && !validateGuildName(req.body.name)) {
+    return invalidFormBody(res, {
+      name: {
+        _errors: [{ code: 'BASE_TYPE_BAD_LENGTH', message: 'Guild name must be between 2 and 100 characters.' }],
+      },
+    });
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(req.body, 'tag')
+    && req.body.tag !== null
+    && (typeof req.body.tag !== 'string' || req.body.tag.trim().length < 2 || req.body.tag.trim().length > 4)
+  ) {
+    return invalidFormBody(res, {
+      tag: {
+        _errors: [{ code: 'BASE_TYPE_BAD_LENGTH', message: 'Guild tag must be between 2 and 4 characters.' }],
+      },
+    });
+  }
+
+  const updates = {};
+  const passthroughFields = [
+    'name',
+    'icon',
+    'description',
+    'brand_color_primary',
+    'game_application_ids',
+    'tag',
+    'badge',
+    'badge_color_primary',
+    'badge_color_secondary',
+    'traits',
+    'visibility',
+    'custom_banner',
+  ];
+  for (const field of passthroughFields) {
+    if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+      updates[field] = field === 'name' ? req.body.name.trim() : req.body[field];
+    }
+  }
+
+  const result = await Guild.updateProfile(req.params.guildId, updates);
+  res.json(result.profile);
+});
+
 router.patch('/guilds/:guildId', authenticate, requireGuildContext, async (req, res) => {
   if (!Guild.canManageGuild(req.guildContext)) {
     return missingPermissions(res);
