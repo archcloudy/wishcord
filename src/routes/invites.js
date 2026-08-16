@@ -3,6 +3,7 @@ const Invite = require('../models/invite');
 const Guild = require('../models/guild');
 const { authenticate } = require('../middleware/auth');
 const { discordError, invalidFormBody, missingPermissions, unknownInvite, unknownGuild } = require('../utils/discordError');
+const { broadcastGuildCreateForUser, broadcastGuildMemberAdd, broadcastInviteDelete } = require('../gateway');
 
 const router = express.Router();
 
@@ -30,10 +31,28 @@ router.get('/invites/:code', async (req, res) => {
 
 router.post('/invites/:code', authenticate, async (req, res) => {
   const sessionId = req.body?.session_id;
+  const invitePreview = await Invite.get(req.params.code);
+  const wasAlreadyMember = invitePreview
+    ? Boolean(await Guild.getMemberRecord(invitePreview.guild_id, req.user.id))
+    : false;
+
   const accepted = await Invite.accept(req.params.code, req.user.id, { sessionId });
 
   if (!accepted) {
     return unknownInvite(res);
+  }
+
+  if (!wasAlreadyMember) {
+    const [fullGuild, member] = await Promise.all([
+      Guild.getFullGuild(accepted.guild_id, { withCounts: true }),
+      Guild.getMember(accepted.guild_id, req.user.id),
+    ]);
+    if (fullGuild) {
+      await broadcastGuildCreateForUser(req.user.id, fullGuild);
+    }
+    if (member) {
+      await broadcastGuildMemberAdd(accepted.guild_id, member);
+    }
   }
 
   res.json(accepted);
@@ -49,6 +68,7 @@ router.delete('/invites/:code', authenticate, async (req, res) => {
     return missingPermissions(res);
   }
   const deleted = await Invite.delete(req.params.code);
+  await broadcastInviteDelete(invite);
   res.json(deleted);
 });
 

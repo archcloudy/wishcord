@@ -2,6 +2,19 @@ const express = require('express');
 const Guild = require('../models/guild');
 const { authenticate } = require('../middleware/auth');
 const {
+  broadcastGuildUpdate,
+  broadcastGuildCreateForUser,
+  broadcastGuildDeleteForUser,
+  broadcastGuildMemberAdd,
+  broadcastGuildMemberUpdate,
+  broadcastGuildMemberRemove,
+  broadcastGuildRoleCreate,
+  broadcastGuildRoleUpdate,
+  broadcastGuildRoleDelete,
+  broadcastChannelCreate,
+  broadcastChannelUpdate,
+} = require('../gateway');
+const {
   invalidFormBody,
   discordError,
   unknownGuild,
@@ -44,6 +57,7 @@ router.get('/users/@me/guilds', authenticate, async (req, res) => {
 });
 
 router.delete('/users/@me/guilds/:guildId', authenticate, async (req, res) => {
+  const existingMember = await Guild.getMember(req.params.guildId, req.user.id);
   const removed = await Guild.removeMember(req.params.guildId, req.user.id);
   if (!removed) {
     const guild = await Guild.getById(req.params.guildId);
@@ -52,6 +66,10 @@ router.delete('/users/@me/guilds/:guildId', authenticate, async (req, res) => {
     }
     return unknownMember(res);
   }
+  if (existingMember) {
+    await broadcastGuildMemberRemove(req.params.guildId, existingMember.user);
+  }
+  await broadcastGuildDeleteForUser(req.user.id, req.params.guildId);
   res.status(204).send();
 });
 
@@ -226,6 +244,7 @@ router.patch('/guilds/:guildId', authenticate, requireGuildContext, async (req, 
   }
 
   const guild = await Guild.update(req.params.guildId, updates);
+  await broadcastGuildUpdate(guild);
   res.json(guild);
 });
 
@@ -253,6 +272,7 @@ router.post('/guilds/:guildId/channels', authenticate, requireGuildContext, asyn
     ...req.body,
     name: req.body.name.trim(),
   });
+  await broadcastChannelCreate(channel);
   res.status(201).json(channel);
 });
 
@@ -260,7 +280,14 @@ router.patch('/guilds/:guildId/channels', authenticate, requireGuildContext, asy
   if (!Guild.canManageChannels(req.guildContext)) {
     return missingPermissions(res);
   }
-  await Guild.updateChannelPositions(req.params.guildId, Array.isArray(req.body) ? req.body : []);
+  const positionUpdates = Array.isArray(req.body) ? req.body : [];
+  await Guild.updateChannelPositions(req.params.guildId, positionUpdates);
+  for (const update of positionUpdates) {
+    const channel = await Guild.getChannel(update.id);
+    if (channel) {
+      await broadcastChannelUpdate(channel);
+    }
+  }
   res.status(204).send();
 });
 
@@ -357,6 +384,7 @@ router.patch('/guilds/:guildId/members/:userId', authenticate, requireGuildConte
   }
 
   const member = await Guild.updateMember(req.params.guildId, req.params.userId, updates);
+  await broadcastGuildMemberUpdate(req.params.guildId, member);
   res.json(member);
 });
 
@@ -364,10 +392,15 @@ router.delete('/guilds/:guildId/members/:userId', authenticate, requireGuildCont
   if (!Guild.canKickMembers(req.guildContext)) {
     return missingPermissions(res);
   }
+  const existingMember = await Guild.getMember(req.params.guildId, req.params.userId);
   const removed = await Guild.removeMember(req.params.guildId, req.params.userId);
   if (!removed) {
     return unknownMember(res);
   }
+  if (existingMember) {
+    await broadcastGuildMemberRemove(req.params.guildId, existingMember.user);
+  }
+  await broadcastGuildDeleteForUser(req.params.userId, req.params.guildId);
   res.status(204).send();
 });
 
@@ -414,6 +447,13 @@ router.put('/guilds/:guildId/members/@me', authenticate, async (req, res) => {
   if (result.alreadyMember) {
     return res.status(204).send();
   }
+  if (!result.lurking) {
+    await broadcastGuildCreateForUser(req.user.id, result.guild);
+    const newMember = await Guild.getMember(req.params.guildId, req.user.id);
+    if (newMember) {
+      await broadcastGuildMemberAdd(req.params.guildId, newMember);
+    }
+  }
   res.json(result.guild);
 });
 
@@ -436,6 +476,7 @@ router.patch('/guilds/:guildId/members/@me', authenticate, requireGuildContext, 
   if (!member) {
     return unknownMember(res);
   }
+  await broadcastGuildMemberUpdate(req.params.guildId, member);
   res.json(member);
 });
 
@@ -444,6 +485,7 @@ router.patch('/guilds/:guildId/members/@me/nick', authenticate, requireGuildCont
   if (!member) {
     return unknownMember(res);
   }
+  await broadcastGuildMemberUpdate(req.params.guildId, member);
   res.json({ nick: member.nick });
 });
 
@@ -473,6 +515,7 @@ router.put('/guilds/:guildId/members/:userId/roles/:roleId', authenticate, requi
   if (!member) {
     return unknownMember(res);
   }
+  await broadcastGuildMemberUpdate(req.params.guildId, member);
   res.status(204).send();
 });
 
@@ -489,6 +532,7 @@ router.delete('/guilds/:guildId/members/:userId/roles/:roleId', authenticate, re
   if (!member) {
     return unknownMember(res);
   }
+  await broadcastGuildMemberUpdate(req.params.guildId, member);
   res.status(204).send();
 });
 
@@ -527,6 +571,7 @@ router.post('/guilds/:guildId/roles', authenticate, requireGuildContext, async (
     return missingPermissions(res);
   }
   const role = await Guild.createRole(req.params.guildId, req.body || {});
+  await broadcastGuildRoleCreate(req.params.guildId, role);
   res.status(201).json(role);
 });
 
@@ -535,6 +580,9 @@ router.patch('/guilds/:guildId/roles', authenticate, requireGuildContext, async 
     return missingPermissions(res);
   }
   const roles = await Guild.updateRolePositions(req.params.guildId, Array.isArray(req.body) ? req.body : []);
+  for (const role of roles) {
+    await broadcastGuildRoleUpdate(req.params.guildId, role);
+  }
   res.json(roles);
 });
 
@@ -547,6 +595,7 @@ router.patch('/guilds/:guildId/roles/:roleId', authenticate, requireGuildContext
     return unknownRole(res);
   }
   const role = await Guild.updateRole(req.params.guildId, req.params.roleId, req.body || {});
+  await broadcastGuildRoleUpdate(req.params.guildId, role);
   res.json(role);
 });
 
@@ -559,6 +608,7 @@ router.delete('/guilds/:guildId/roles/:roleId', authenticate, requireGuildContex
     return unknownRole(res);
   }
   await Guild.deleteRole(req.params.guildId, req.params.roleId);
+  await broadcastGuildRoleDelete(req.params.guildId, req.params.roleId);
   res.status(204).send();
 });
 
@@ -575,6 +625,9 @@ router.patch('/guilds/:guildId/roles/:roleId/members', authenticate, requireGuil
     req.params.roleId,
     Array.isArray(req.body.member_ids) ? req.body.member_ids : [],
   );
+  for (const member of Object.values(members)) {
+    await broadcastGuildMemberUpdate(req.params.guildId, member);
+  }
   res.json(members);
 });
 

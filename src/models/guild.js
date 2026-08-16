@@ -1098,6 +1098,14 @@ class Guild {
       .filter(Boolean);
   }
 
+  static async listGuildIdsForUser(userId) {
+    const guilds = await db.manyOrNone(
+      'SELECT guild_id FROM guild_members WHERE user_id::text = $1',
+      [String(userId)],
+    );
+    return guilds.map((row) => String(row.guild_id));
+  }
+
   static async listGuildsForReady(userId) {
     const guilds = await db.manyOrNone(
       `

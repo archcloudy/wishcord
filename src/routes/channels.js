@@ -8,6 +8,10 @@ const {
   broadcastMessageUpdate,
   broadcastMessageDelete,
   broadcastReadStateUpdate,
+  broadcastChannelUpdate,
+  broadcastChannelDelete,
+  broadcastInviteCreate,
+  broadcastTypingStart,
 } = require('../gateway');
 const { authenticate } = require('../middleware/auth');
 const {
@@ -138,7 +142,16 @@ router.post('/channels/:channelId/invites', authenticate, requireChannelContext,
     return invalidFormBody(res);
   }
   const invite = await Invite.create(req.params.channelId, req.user.id, req.body || {});
+  await broadcastInviteCreate(invite);
   res.status(200).json(invite);
+});
+
+router.post('/channels/:channelId/typing', authenticate, requireChannelContext, async (req, res) => {
+  if (!Guild.canSendMessages(req.guildContext, req.channel.id)) {
+    return missingPermissions(res);
+  }
+  await broadcastTypingStart(req.params.channelId, req.user.id, req.channel.guild_id, req.guildContext.member);
+  res.status(204).send();
 });
 
 router.patch('/channels/:channelId/messages/:messageId', authenticate, requireChannelContext, async (req, res) => {
@@ -183,6 +196,7 @@ router.patch('/channels/:channelId', authenticate, requireChannelContext, async 
     return missingPermissions(res);
   }
   const channel = await Guild.updateChannel(req.params.channelId, req.body || {});
+  await broadcastChannelUpdate(channel);
   res.json(channel);
 });
 
@@ -191,6 +205,7 @@ router.delete('/channels/:channelId', authenticate, requireChannelContext, async
     return missingPermissions(res);
   }
   const channel = await Guild.deleteChannel(req.params.channelId);
+  await broadcastChannelDelete(channel);
   res.json(channel);
 });
 

@@ -331,6 +331,194 @@ const broadcastReadStateUpdate = async (userId, payload) => {
   })));
 };
 
+const getConnectionsForGuild = async (guildId) => {
+  const connected = Array.from(connections).filter((ws) => ws.readyState === WebSocket.OPEN && ws._session?.identified && ws._user);
+  const members = [];
+  for (const ws of connected) {
+    const member = await Guild.getMemberRecord(guildId, ws._user.id);
+    if (member) {
+      members.push(ws);
+    }
+  }
+  return members;
+};
+
+const broadcastGuildUpdate = async (guild) => {
+  const targets = await getConnectionsForGuild(guild.id);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_UPDATE', guild).catch((error) => {
+    console.error('Gateway GUILD_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildCreateForUser = async (userId, guild) => {
+  const targets = getConnectionsForUser(userId);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_CREATE', guild).catch((error) => {
+    console.error('Gateway GUILD_CREATE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildDeleteForUser = async (userId, guildId) => {
+  const targets = getConnectionsForUser(userId);
+  const payload = { id: String(guildId), unavailable: false };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_DELETE', payload).catch((error) => {
+    console.error('Gateway GUILD_DELETE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildMemberAdd = async (guildId, member) => {
+  const targets = await getConnectionsForGuild(guildId);
+  const payload = { ...member, guild_id: String(guildId) };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_MEMBER_ADD', payload).catch((error) => {
+    console.error('Gateway GUILD_MEMBER_ADD dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildMemberUpdate = async (guildId, member) => {
+  const targets = await getConnectionsForGuild(guildId);
+  const payload = { ...member, guild_id: String(guildId) };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_MEMBER_UPDATE', payload).catch((error) => {
+    console.error('Gateway GUILD_MEMBER_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildMemberRemove = async (guildId, user) => {
+  const targets = await getConnectionsForGuild(guildId);
+  const payload = {
+    guild_id: String(guildId),
+    user: {
+      id: String(user.id),
+      username: user.username,
+      discriminator: user.discriminator,
+      global_name: user.global_name ?? null,
+      avatar: user.avatar ?? null,
+    },
+  };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_MEMBER_REMOVE', payload).catch((error) => {
+    console.error('Gateway GUILD_MEMBER_REMOVE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildRoleCreate = async (guildId, role) => {
+  const targets = await getConnectionsForGuild(guildId);
+  const payload = { guild_id: String(guildId), role };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_ROLE_CREATE', payload).catch((error) => {
+    console.error('Gateway GUILD_ROLE_CREATE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildRoleUpdate = async (guildId, role) => {
+  const targets = await getConnectionsForGuild(guildId);
+  const payload = { guild_id: String(guildId), role };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_ROLE_UPDATE', payload).catch((error) => {
+    console.error('Gateway GUILD_ROLE_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastGuildRoleDelete = async (guildId, roleId) => {
+  const targets = await getConnectionsForGuild(guildId);
+  const payload = { guild_id: String(guildId), role_id: String(roleId) };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'GUILD_ROLE_DELETE', payload).catch((error) => {
+    console.error('Gateway GUILD_ROLE_DELETE dispatch failed:', error);
+  })));
+};
+
+const broadcastChannelCreate = async (channel) => {
+  const targets = await getInterestedConnectionsForChannel(channel.id);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'CHANNEL_CREATE', channel).catch((error) => {
+    console.error('Gateway CHANNEL_CREATE dispatch failed:', error);
+  })));
+};
+
+const broadcastChannelUpdate = async (channel) => {
+  const targets = await getInterestedConnectionsForChannel(channel.id);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'CHANNEL_UPDATE', channel).catch((error) => {
+    console.error('Gateway CHANNEL_UPDATE dispatch failed:', error);
+  })));
+};
+
+const broadcastChannelDelete = async (channel) => {
+  const targets = await getConnectionsForGuild(channel.guild_id);
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'CHANNEL_DELETE', channel).catch((error) => {
+    console.error('Gateway CHANNEL_DELETE dispatch failed:', error);
+  })));
+};
+
+const broadcastTypingStart = async (channelId, userId, guildId, member = null) => {
+  const targets = (await getInterestedConnectionsForChannel(channelId))
+    .filter((ws) => String(ws._user?.id) !== String(userId));
+  const payload = {
+    channel_id: String(channelId),
+    guild_id: guildId ? String(guildId) : undefined,
+    user_id: String(userId),
+    timestamp: Math.floor(Date.now() / 1000),
+    member: member || undefined,
+  };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'TYPING_START', payload).catch((error) => {
+    console.error('Gateway TYPING_START dispatch failed:', error);
+  })));
+};
+
+const broadcastInviteCreate = async (invite) => {
+  const targets = await getInterestedConnectionsForChannel(invite.channel.id);
+  const payload = {
+    channel_id: String(invite.channel.id),
+    code: invite.code,
+    created_at: invite.created_at,
+    guild_id: invite.guild_id,
+    inviter: invite.inviter,
+    max_age: invite.max_age,
+    max_uses: invite.max_uses,
+    temporary: invite.temporary,
+    uses: invite.uses ?? 0,
+  };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'INVITE_CREATE', payload).catch((error) => {
+    console.error('Gateway INVITE_CREATE dispatch failed:', error);
+  })));
+};
+
+const broadcastInviteDelete = async (invite) => {
+  const targets = await getInterestedConnectionsForChannel(invite.channel.id);
+  const payload = {
+    channel_id: String(invite.channel.id),
+    guild_id: invite.guild_id,
+    code: invite.code,
+  };
+  await Promise.all(targets.map((ws) => sendDispatch(ws, 'INVITE_DELETE', payload).catch((error) => {
+    console.error('Gateway INVITE_DELETE dispatch failed:', error);
+  })));
+};
+
+const broadcastPresenceUpdate = async (userId) => {
+  const [relationships, guildIds] = await Promise.all([
+    Relationship.listForUser(userId).catch(() => []),
+    Guild.listGuildIdsForUser(userId).catch(() => []),
+  ]);
+
+  const friendIds = relationships
+    .filter((relationship) => relationship.type === Relationship.TYPES.FRIEND)
+    .map((relationship) => relationship.id);
+
+  for (const guildId of guildIds) {
+    const targets = (await getConnectionsForGuild(guildId))
+      .filter((ws) => String(ws._user.id) !== String(userId));
+    if (!targets.length) {
+      continue;
+    }
+    const payload = buildPresenceUpdatePayload(userId, guildId);
+    await Promise.all(targets.map((ws) => sendDispatch(ws, 'PRESENCE_UPDATE', payload).catch((error) => {
+      console.error('Gateway PRESENCE_UPDATE dispatch failed:', error);
+    })));
+  }
+
+  const friendPayload = buildPresenceUpdatePayload(userId);
+  for (const friendId of friendIds) {
+    const targets = getConnectionsForUser(friendId);
+    await Promise.all(targets.map((ws) => sendDispatch(ws, 'PRESENCE_UPDATE', friendPayload).catch((error) => {
+      console.error('Gateway PRESENCE_UPDATE dispatch failed:', error);
+    })));
+  }
+};
+
 const sortMembersForList = (members) => [...members].sort((left, right) => {
   const leftPresence = buildLivePresence(left.user.id);
   const rightPresence = buildLivePresence(right.user.id);
@@ -1032,6 +1220,12 @@ const handlePresenceUpdate = async (ws, payload) => {
     afk: Boolean(data.afk),
     client_status: status === 'offline' || status === 'invisible' ? {} : { web: status },
   };
+
+  if (ws._user) {
+    broadcastPresenceUpdate(ws._user.id).catch((error) => {
+      console.error('Failed to broadcast presence update:', error);
+    });
+  }
 };
 
 const handleResume = async (ws, payload) => {
@@ -1216,8 +1410,13 @@ const createGatewayServer = (port = 8080) => {
         detachUserSession(userId, ws);
         await cleanupTransport(ws);
         sessions.delete(ws);
+        connections.delete(ws);
+        broadcastPresenceUpdate(userId).catch((error) => {
+          console.error('Failed to broadcast presence update on disconnect:', error);
+        });
+      } else {
+        connections.delete(ws);
       }
-      connections.delete(ws);
       console.log('Gateway connection closed:', reason?.toString());
     });
 
@@ -1248,4 +1447,20 @@ module.exports = {
   broadcastRelationshipRemove,
   broadcastUserSettingsProtoUpdate,
   broadcastUserNoteUpdate,
+  broadcastGuildUpdate,
+  broadcastGuildCreateForUser,
+  broadcastGuildDeleteForUser,
+  broadcastGuildMemberAdd,
+  broadcastGuildMemberUpdate,
+  broadcastGuildMemberRemove,
+  broadcastGuildRoleCreate,
+  broadcastGuildRoleUpdate,
+  broadcastGuildRoleDelete,
+  broadcastChannelCreate,
+  broadcastChannelUpdate,
+  broadcastChannelDelete,
+  broadcastTypingStart,
+  broadcastInviteCreate,
+  broadcastInviteDelete,
+  broadcastPresenceUpdate,
 };
