@@ -6,21 +6,36 @@ const { discordError, invalidFormBody, missingPermissions, unknownInvite, unknow
 
 const router = express.Router();
 
-router.get('/invites/:code', authenticate, async (req, res) => {
+const toBoolean = (value, fallback = false) => {
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return fallback;
+};
+
+router.get('/invites/:code', async (req, res) => {
   const invite = await Invite.get(req.params.code, {
-    withCounts: String(req.query.with_counts).toLowerCase() === 'true',
+    withCounts: toBoolean(req.query.with_counts),
   });
+
   if (!invite) {
     return unknownInvite(res);
   }
+
   res.json(invite);
 });
 
 router.post('/invites/:code', authenticate, async (req, res) => {
-  const accepted = await Invite.accept(req.params.code, req.user.id);
+  const sessionId = req.body?.session_id;
+  const accepted = await Invite.accept(req.params.code, req.user.id, { sessionId });
+
   if (!accepted) {
     return unknownInvite(res);
   }
+
   res.json(accepted);
 });
 

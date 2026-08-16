@@ -12,6 +12,16 @@ const {
 
 const router = express.Router();
 
+const toBoolean = (value, fallback = false) => {
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return fallback;
+};
+
 const validateGuildName = (name) => typeof name === 'string' && name.trim().length >= 2 && name.trim().length <= 100;
 
 const requireGuildContext = async (req, res, next) => {
@@ -28,7 +38,7 @@ const requireGuildContext = async (req, res, next) => {
 };
 
 router.get('/users/@me/guilds', authenticate, async (req, res) => {
-  const withCounts = String(req.query.with_counts).toLowerCase() === 'true';
+  const withCounts = toBoolean(req.query.with_counts);
   const guilds = await Guild.listForUser(req.user.id, withCounts);
   res.json(guilds);
 });
@@ -73,7 +83,7 @@ router.post('/guilds', authenticate, async (req, res) => {
 
 router.get('/guilds/:guildId', authenticate, async (req, res) => {
   const guild = await Guild.getForMember(req.params.guildId, req.user.id, {
-    withCounts: String(req.query.with_counts).toLowerCase() === 'true',
+    withCounts: toBoolean(req.query.with_counts),
   });
   if (!guild) {
     const exists = await Guild.getById(req.params.guildId);
@@ -151,7 +161,7 @@ router.get('/guilds/:guildId/channels', authenticate, requireGuildContext, async
   const channels = await Guild.listChannelsForUser(
     req.params.guildId,
     req.user.id,
-    String(req.query.permissions).toLowerCase() === 'true',
+    toBoolean(req.query.permissions),
   );
   res.json(channels);
 });

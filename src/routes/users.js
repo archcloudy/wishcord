@@ -24,6 +24,16 @@ const {
 
 const router = express.Router();
 
+const toBoolean = (value, fallback = false) => {
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return fallback;
+};
+
 const buildUserResponse = (user, options = {}) => ({
   id: String(user.id),
   username: user.username,
@@ -63,7 +73,7 @@ const buildUserResponse = (user, options = {}) => ({
 
 // Get current user
 router.get('/@me', authenticate, async (req, res) => {
-  const withAnalyticsToken = String(req.query.with_analytics_token).toLowerCase() === 'true';
+  const withAnalyticsToken = toBoolean(req.query.with_analytics_token);
   res.json(buildUserResponse(req.user, {
     includeAnalyticsToken: withAnalyticsToken,
     mfaEnabled: false,

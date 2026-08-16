@@ -145,7 +145,7 @@ class Invite {
     return invite;
   }
 
-  static async accept(code, userId) {
+  static async accept(code, userId, options = {}) {
     return db.tx(async (tx) => {
       const invite = await tx.oneOrNone('SELECT * FROM invites WHERE code = $1', [code]);
       if (!invite) {
@@ -172,7 +172,7 @@ class Invite {
       if (!existingMember) {
         await tx.none(
           'INSERT INTO guild_members (guild_id, user_id, role_ids, flags) VALUES ($1, $2, $3, 0)',
-          [invite.guild_id, userId, JSON.stringify([String(invite.guild_id)])],
+          [invite.guild_id, userId, JSON.stringify([])],
         );
       }
 
