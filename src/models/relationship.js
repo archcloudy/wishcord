@@ -107,10 +107,47 @@ class Relationship {
     await this.ensureSchema();
 
     if (String(userId) === String(targetId)) {
-      return null;
+      return { status: 'invalid_self' };
     }
 
     return db.tx(async (tx) => {
+      const [outgoing, incoming] = await Promise.all([
+        tx.oneOrNone(
+          'SELECT type FROM relationships WHERE user_id::text = $1 AND target_id::text = $2',
+          [String(userId), String(targetId)],
+        ),
+        tx.oneOrNone(
+          'SELECT type FROM relationships WHERE user_id::text = $1 AND target_id::text = $2',
+          [String(targetId), String(userId)],
+        ),
+      ]);
+
+      if (outgoing?.type === RELATIONSHIP_TYPES.BLOCKED) {
+        return { status: 'blocked_by_you' };
+      }
+      if (incoming?.type === RELATIONSHIP_TYPES.BLOCKED) {
+        return { status: 'blocked_by_target' };
+      }
+      if (outgoing?.type === RELATIONSHIP_TYPES.FRIEND) {
+        return { status: 'already_friends' };
+      }
+      if (outgoing?.type === RELATIONSHIP_TYPES.OUTGOING_REQUEST) {
+        return { status: 'already_pending' };
+      }
+
+      if (outgoing?.type === RELATIONSHIP_TYPES.INCOMING_REQUEST) {
+        // target already requested us, so sending a request now just accepts theirs
+        await tx.none(
+          'UPDATE relationships SET type = $3, since = CURRENT_TIMESTAMP WHERE user_id::text = $1 AND target_id::text = $2',
+          [String(userId), String(targetId), RELATIONSHIP_TYPES.FRIEND],
+        );
+        await tx.none(
+          'UPDATE relationships SET type = $3, since = CURRENT_TIMESTAMP WHERE user_id::text = $1 AND target_id::text = $2',
+          [String(targetId), String(userId), RELATIONSHIP_TYPES.FRIEND],
+        );
+        return { status: 'accepted' };
+      }
+
       await tx.none(
         `
           INSERT INTO relationships (user_id, target_id, type, since)
@@ -134,6 +171,8 @@ class Relationship {
         `,
         [String(targetId), String(userId), RELATIONSHIP_TYPES.INCOMING_REQUEST],
       );
+
+      return { status: 'created' };
     });
   }
 
@@ -267,9 +306,11 @@ class Relationship {
   }
 
   static async findTargetByTag(username, discriminator = null) {
-    if (discriminator == null || discriminator === '0') {
+    if (discriminator == null || String(discriminator) === '0') {
       return User.findByUsername(username);
     }
+
+    const normalizedDiscriminator = String(discriminator).padStart(4, '0');
 
     return db.oneOrNone(
       `
@@ -277,7 +318,7 @@ class Relationship {
         FROM users
         WHERE username = $1 AND discriminator = $2
       `,
-      [username, discriminator],
+      [username, normalizedDiscriminator],
     );
   }
 }

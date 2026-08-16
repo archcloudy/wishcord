@@ -83,6 +83,202 @@ router.get('/@me', authenticate, async (req, res) => {
   }));
 });
 
+const notifyRelationshipChange = async (userId, targetId, hadExistingRelationship) => {
+  const relationship = await Relationship.get(userId, targetId);
+  if (!relationship) {
+    return;
+  }
+  if (hadExistingRelationship) {
+    await broadcastRelationshipUpdate(userId, relationship);
+  } else {
+    await broadcastRelationshipAdd(userId, relationship);
+  }
+};
+
+router.get('/@me/relationships', authenticate, async (req, res) => {
+  try {
+    const relationships = await Relationship.listForUser(req.user.id);
+    res.json(relationships);
+  } catch (error) {
+    console.error('Error fetching relationships:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
+router.post('/@me/relationships', authenticate, async (req, res) => {
+  const { username, discriminator = null } = req.body || {};
+
+  if (typeof username !== 'string' || !username.trim()) {
+    return invalidFormBody(res, {
+      username: {
+        _errors: [{ code: 'BASE_TYPE_REQUIRED', message: 'username is required.' }],
+      },
+    });
+  }
+
+  try {
+    const target = await Relationship.findTargetByTag(username.trim(), discriminator);
+    if (!target) {
+      return unknownUser(res);
+    }
+    if (String(target.id) === String(req.user.id)) {
+      return invalidFormBody(res, {
+        username: {
+          _errors: [{ code: 'BASE_TYPE_INVALID', message: 'You cannot send a friend request to yourself.' }],
+        },
+      });
+    }
+
+    const hadUserRelationship = Boolean(await Relationship.get(req.user.id, target.id));
+    const hadTargetRelationship = Boolean(await Relationship.get(target.id, req.user.id));
+
+    const result = await Relationship.createFriendRequest(req.user.id, target.id);
+
+    if (result.status === 'already_friends') {
+      return invalidFormBody(res, {
+        username: {
+          _errors: [{ code: 'FRIEND_REQUEST_ALREADY_FRIENDS', message: 'You are already friends with this user.' }],
+        },
+      });
+    }
+    if (result.status === 'already_pending') {
+      return invalidFormBody(res, {
+        username: {
+          _errors: [{ code: 'FRIEND_REQUEST_ALREADY_PENDING', message: 'You have already sent this user a friend request.' }],
+        },
+      });
+    }
+    if (result.status === 'blocked_by_you' || result.status === 'blocked_by_target') {
+      return invalidFormBody(res, {
+        username: {
+          _errors: [{ code: 'FRIEND_REQUEST_BLOCKED', message: 'Unable to send a friend request to this user.' }],
+        },
+      });
+    }
+
+    await notifyRelationshipChange(req.user.id, target.id, hadUserRelationship);
+    await notifyRelationshipChange(target.id, req.user.id, hadTargetRelationship);
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error sending friend request:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
+router.delete('/@me/relationships', authenticate, async (req, res) => {
+  const relationshipType = req.query.relationship_type !== undefined
+    ? Number(req.query.relationship_type)
+    : Relationship.TYPES.INCOMING_REQUEST;
+
+  if (relationshipType !== Relationship.TYPES.INCOMING_REQUEST) {
+    return invalidFormBody(res, {
+      relationship_type: {
+        _errors: [{ code: 'BASE_TYPE_CHOICES', message: 'Only INCOMING_REQUEST relationships can be bulk removed.' }],
+      },
+    });
+  }
+
+  try {
+    const relationships = await Relationship.listForUser(req.user.id);
+    const targets = relationships.filter((relationship) => relationship.type === Relationship.TYPES.INCOMING_REQUEST);
+
+    for (const relationship of targets) {
+      await Relationship.remove(req.user.id, relationship.id);
+      await broadcastRelationshipRemove(req.user.id, relationship.id);
+      await broadcastRelationshipRemove(relationship.id, req.user.id);
+    }
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error bulk removing relationships:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
+router.put('/@me/relationships/:userId', authenticate, async (req, res) => {
+  const { userId: targetId } = req.params;
+
+  if (String(targetId) === String(req.user.id)) {
+    return invalidFormBody(res);
+  }
+
+  try {
+    const target = await User.findById(targetId);
+    if (!target) {
+      return unknownUser(res);
+    }
+
+    const type = req.body?.type ?? -1;
+    if (![-1, Relationship.TYPES.FRIEND, Relationship.TYPES.BLOCKED].includes(type)) {
+      return invalidFormBody(res, {
+        type: {
+          _errors: [{ code: 'BASE_TYPE_CHOICES', message: 'Invalid relationship type.' }],
+        },
+      });
+    }
+
+    const hadUserRelationship = Boolean(await Relationship.get(req.user.id, targetId));
+    const hadTargetRelationship = Boolean(await Relationship.get(targetId, req.user.id));
+
+    if (type === Relationship.TYPES.BLOCKED) {
+      await Relationship.setRelationship(req.user.id, targetId, Relationship.TYPES.BLOCKED);
+    } else {
+      await Relationship.acceptOrRequest(req.user.id, targetId);
+    }
+
+    await notifyRelationshipChange(req.user.id, targetId, hadUserRelationship);
+    await notifyRelationshipChange(targetId, req.user.id, hadTargetRelationship);
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error creating relationship:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
+router.patch('/@me/relationships/:userId', authenticate, async (req, res) => {
+  const { userId: targetId } = req.params;
+
+  try {
+    const existing = await Relationship.get(req.user.id, targetId);
+    if (!existing || existing.type !== Relationship.TYPES.FRIEND) {
+      return unknownUser(res);
+    }
+
+    const { nickname } = req.body || {};
+    if (nickname != null && (typeof nickname !== 'string' || nickname.length < 1 || nickname.length > 32)) {
+      return invalidFormBody(res, {
+        nickname: {
+          _errors: [{ code: 'BASE_TYPE_BAD_LENGTH', message: 'nickname must be between 1 and 32 characters.' }],
+        },
+      });
+    }
+
+    await Relationship.updateNickname(req.user.id, targetId, nickname ?? null);
+    await notifyRelationshipChange(req.user.id, targetId, true);
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error modifying relationship:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
+router.delete('/@me/relationships/:userId', authenticate, async (req, res) => {
+  const { userId: targetId } = req.params;
+
+  try {
+    await Relationship.remove(req.user.id, targetId);
+    await broadcastRelationshipRemove(req.user.id, targetId);
+    await broadcastRelationshipRemove(targetId, req.user.id);
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error removing relationship:', error);
+    discordError(res, 500, 50000, 'Unknown Error');
+  }
+});
+
 router.get('/@me/guilds/settings', authenticate, async (req, res) => {
   try {
     const entries = await UserGuildSettings.listForUser(req.user.id);
